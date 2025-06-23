@@ -131,18 +131,7 @@ bert-minimal = hug.fetchModel {
 
 ## Working with Private Models
 
-For gated or private models, set your Hugging Face token:
-
-```bash
-# Via environment
-$ HF_TOKEN=hf_your_token_here nix-hug add meta-llama/Llama-2-7b-hf
-
-# Or export for session
-$ export HF_TOKEN=hf_your_token_here
-$ nix-hug add meta-llama/Llama-2-7b-hf
-```
-
-**Important**: Never put tokens in Nix files. They would be world-readable in `/nix/store`.
+`nix-hug` doesn't support gated or private models. Consider using a proxy to fetch them. 
 
 ## Version Control
 
