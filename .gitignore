@@ -1,0 +1,29 @@
+# Nix build results
+result
+result-*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Lock files (user-specific)
+hug.lock
+*.lock.tmp
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+.cache/

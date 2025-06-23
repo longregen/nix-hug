@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nix-hug"
+version = "1.0.0"
+description = "Declarative Hugging Face model management for Nix"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "huggingface-hub",
+    "click",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-mock",
+]
+
+[project.scripts]
+nix-hug = "nix_hug.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nix_hug*"]
+
+[tool.setuptools.package-dir]
+"" = "."
+
+[tool.pytest.ini_options]
+testpaths = ["nix_hug"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
