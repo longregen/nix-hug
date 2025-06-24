@@ -26,7 +26,7 @@ main() {
                 echo "nix-hug version ${VERSION}"
                 exit 0
                 ;;
-            fetch|ls)
+            fetch|ls|cache)
                 command="$1"
                 shift
                 break
@@ -49,6 +49,9 @@ main() {
             ;;
         ls)
             cmd_ls "$@"
+            ;;
+        cache)
+            cmd_cache "$@"
             ;;
         "")
             show_help

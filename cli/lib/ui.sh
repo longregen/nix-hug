@@ -1,5 +1,7 @@
 # UI and formatting functions
 
+source "${NIX_HUG_LIB_DIR}/nix-expr.sh"
+
 show_help() {
     cat << EOF
 ${BOLD}nix-hug${NC} - Declarative Hugging Face model management for Nix
@@ -8,25 +10,42 @@ ${BOLD}USAGE:${NC}
     nix-hug [OPTIONS] <COMMAND> [ARGS]
 
 ${BOLD}COMMANDS:${NC}
-    fetch    Download model and generate Nix expression
-    ls       List repository contents without downloading
+    fetch           Download model or dataset and generate Nix expression
+    ls              List repository contents without downloading
+    cache           Manage local cache (clean, verify, stats)
 
 ${BOLD}OPTIONS:${NC}
     --debug     Show detailed execution steps
     --version   Show version information
     --help      Show this help message
 
+${BOLD}FETCH OPTIONS:${NC}
+    --ref REF           Use specific git reference (default: main)
+    --include PATTERN   Include files matching glob pattern
+    --exclude PATTERN   Exclude files matching glob pattern
+    --file FILENAME     Include specific file by name
+    --yes, -y           Auto-confirm operations
+
+${BOLD}LS OPTIONS:${NC}
+    --ref REF           Use specific git reference (default: main)
+    --include PATTERN   Include files matching glob pattern
+    --exclude PATTERN   Exclude files matching glob pattern
+    --file FILENAME     Show specific file by name
+
 ${BOLD}EXAMPLES:${NC}
     nix-hug fetch openai-community/gpt2
     nix-hug fetch openai-community/gpt2 --include '*.safetensors'
     nix-hug ls openai-community/gpt2 --exclude '*.bin'
+    nix-hug ls google-bert/bert-base-uncased --file config.json
+    nix-hug fetch microsoft/DialoGPT-medium --yes
+    nix-hug fetch rajpurkar/squad --include '*.json'
+    nix-hug fetch stanfordnlp/imdb --include '*.parquet'
 
-For detailed command help, see the README or run:
-    nix-hug <command> --help
+For more information, visit: https://github.com/longregen/nix-hug
 EOF
 }
 
-# Display file listing
+# Display file listing with optimized formatting
 display_files() {
     local files="$1"
     local header="$2"
@@ -38,6 +57,7 @@ display_files() {
     local lfs_count=0
     local lfs_size=0
     
+    # Process files in a single pass
     while IFS= read -r file; do
         local path size is_lfs
         path=$(echo "$file" | jq -r '.path')
@@ -64,8 +84,7 @@ display_files() {
     fi
 }
 
-
-# Generate usage example after fetch
+# Generate usage example after fetch - optimized template
 generate_usage_example() {
     local repo_id="$1"
     local ref="$2"
@@ -75,73 +94,38 @@ generate_usage_example() {
     local derivation_hash="$6"
     
     cat << EOF
+${BOLD}Usage:${NC}
 
-${GREEN}Download complete!${NC}
-
-${BOLD}Usage in your Nix configuration:${NC}
-
-\`\`\`nix
-{
-  inputs.nix-hug.url = "github:longregen/nix-hug";
-  
-  outputs = { self, nixpkgs, nix-hug }: {
-    packages.x86_64-linux.myModel = 
-      nix-hug.lib.x86_64-linux.fetchModel {
-        url = "$repo_id";
-        rev = "$ref";
-$(if [[ "$filter_json" != "null" ]]; then echo "        filters = $filter_json;"; fi)
-        repoInfoHash = "$repo_info_hash";
-        fileTreeHash = "$file_tree_hash";
-        derivationHash = "$derivation_hash";
-      };
-  };
-}
-\`\`\`
-
-${BOLD}Or use directly:${NC}
-
-nix-hug.lib.fetchModel {
-  url = "$repo_id";
-  rev = "$ref";
-$(if [[ "$filter_json" != "null" ]]; then echo "  filters = $filter_json;"; fi)
-  repoInfoHash = "$repo_info_hash";
-  fileTreeHash = "$file_tree_hash";
-  derivationHash = "$derivation_hash";
-};
+$(format_fetch_model_call "" "nix-hug-lib" "$repo_id" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "$derivation_hash");
 EOF
 }
 
-
-# Display filtered files
+# Display filtered files with improved logic
 display_filtered_files() {
     local files="$1"
     shift
     local filters=("$@")
     
-    # Apply filters using jq
+    # Parse filter arguments
     local filter_type=""
     local patterns=()
     
-    # Parse filter arguments
     for ((i=0; i<${#filters[@]}; i+=2)); do
         local flag="${filters[i]}"
         local pattern="${filters[i+1]}"
         
         case "$flag" in
-            --include)
-                filter_type="include"
-                ;;
-            --exclude)
-                filter_type="exclude"
-                ;;
+            --include) filter_type="include" ;;
+            --exclude) filter_type="exclude" ;;
+            --file) filter_type="file" ;;
         esac
         
-        # Convert glob to regex
+        # Convert glob to regex for jq
         pattern=$(echo "$pattern" | sed 's/\*/\.\*/g; s/\?/\./g; s/$/$/;')
         patterns+=("$pattern")
     done
     
-    # Apply filter with jq - include non-LFS files for include/exclude filters
+    # Apply filter with jq
     local filtered_files
     if [[ "$filter_type" == "include" ]]; then
         local pattern_regex
@@ -153,10 +137,14 @@ display_filtered_files() {
         pattern_regex=$(IFS='|'; echo "${patterns[*]}")
         # Exclude matching LFS files but keep all non-LFS files
         filtered_files=$(echo "$files" | jq --arg regex "$pattern_regex" '[.[] | select((.path | test($regex) | not) or (has("lfs") | not))]')
+    elif [[ "$filter_type" == "file" ]]; then
+        # For --file, match exact filename
+        local filename="${filters[1]}"
+        filtered_files=$(echo "$files" | jq --arg file "$filename" '[.[] | select(.path == $file)]')
     else
         filtered_files="$files"
     fi
     
-    echo "Files matching filters: ${filters[*]}"
+    echo "Files matching filters: ${filters[@]@Q}"
     display_files "$filtered_files" ""
 }

@@ -1,58 +1,118 @@
-# nix-hug v3
+# nix-hug
 
-Declarative Hugging Face model management for Nix - A complete rewrite with improved architecture, performance, and user experience.
+Declarative Hugging Face model and dataset management for Nix.
 
-## Features
+## Usage
 
-- **Declarative Model Management**: Define models in your Nix configuration
-- **Smart Filtering**: Include/exclude files with regex patterns or specific file lists
-- **Hash Discovery**: Automatic hash discovery and caching
-- **Modular Architecture**: Clean separation between CLI and library components
-- **Developer Friendly**: Comprehensive error handling and helpful output
+### Fetch a model
 
-## Quick Start
+```bash
+# Download Mistral 7B Instruct model (safetensors only)
+nix-hug fetch mistralai/Mistral-7B-Instruct-v0.3 --include '*.safetensors'
+```
 
-### Installation
+This outputs a Nix expression you can use in your configuration:
+
+```nix
+nix-hug-lib.fetchModel {
+  url = "mistralai/Mistral-7B-Instruct-v0.3";
+  rev = "main";
+  filters = { include = [ ".*\\.safetensors" ]; };
+  repoInfoHash = "sha256-abc123...";
+  fileTreeHash = "sha256-def456...";
+  derivationHash = "sha256-ghi789...";
+}
+```
+
+```bash
+# Download Google's BERT base model
+nix-hug fetch google-bert/bert-base-uncased
+```
+
+This outputs:
+
+```nix
+nix-hug-lib.fetchModel {
+  url = "google-bert/bert-base-uncased";
+  rev = "main";
+  repoInfoHash = "sha256-xyz789...";
+  fileTreeHash = "sha256-uvw456...";
+  derivationHash = "sha256-rst123...";
+}
+```
+
+### Create a HuggingFace cache
+
+The `buildCache` function creates a HuggingFace Hub-compatible cache that works with transformers:
+
+```nix
+# In your flake.nix
+let
+  mistral-model = nix-hug.lib.${system}.fetchModel {
+    url = "mistralai/Mistral-7B-Instruct-v0.3";
+    rev = "main";
+    filters = { include = [ ".*\\.safetensors" ]; };
+    repoInfoHash = "sha256-abc123...";
+    fileTreeHash = "sha256-def456...";
+    derivationHash = "sha256-ghi789...";
+  };
+  
+  bert-model = nix-hug.lib.${system}.fetchModel {
+    url = "google-bert/bert-base-uncased";
+    rev = "main";
+    repoInfoHash = "sha256-xyz789...";
+    fileTreeHash = "sha256-uvw456...";
+    derivationHash = "sha256-rst123...";
+  };
+  
+  # Create cache with multiple models
+  model-cache = nix-hug.lib.${system}.buildCache {
+    models = [ mistral-model bert-model ];
+    hash = "sha256-cache-hash...";
+  };
+```
+
+Use the cache with Python:
+
+```bash
+export HF_HUB_CACHE=/nix/store/...-hf-hub-cache
+
+python -c "
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# Load Mistral model from cache
+model = AutoModelForCausalLM.from_pretrained('mistralai/Mistral-7B-Instruct-v0.3')
+tokenizer = AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.3')
+
+# Generate text
+inputs = tokenizer('Hello, how are you?', return_tensors='pt')
+outputs = model.generate(**inputs, max_length=50)
+print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+"
+```
+
+The cache structure is compatible with HuggingFace transformers and works offline.
+
+## Installation
 
 ```bash
 # Add to your flake inputs
 {
   inputs.nix-hug.url = "github:longregen/nix-hug";
 }
-
-# Or install directly
-nix profile install github:longregen/nix-hug
 ```
 
-### Basic Usage
+### Other commands
 
 ```bash
-# List model files
-nix-hug ls openai-community/gpt2
+# List model files without downloading
+nix-hug ls mistralai/Mistral-7B-Instruct-v0.3
 
-# Download a model
-nix-hug fetch openai-community/gpt2
+# Download a dataset
+nix-hug fetch rajpurkar/squad --include '*.json'
 
 # Download with filters
-nix-hug fetch openai-community/gpt2 --include '*.safetensors'
-```
-
-### In Your Nix Configuration
-
-```nix
-{
-  inputs.nix-hug.url = "github:longregen/nix-hug";
-  
-  outputs = { self, nixpkgs, nix-hug }: {
-    packages.x86_64-linux.gpt2-model = 
-      nix-hug.lib.x86_64-linux.fetchModel {
-        url = "openai-community/gpt2";
-        rev = "main";
-        filters = nix-hug.lib.x86_64-linux.filterPresets.safetensors;
-        # Hashes will be discovered automatically
-      };
-  };
-}
+nix-hug fetch google-bert/bert-base-uncased --include '*.safetensors'
 ```
 
 ## Development
@@ -62,12 +122,76 @@ nix develop
 ./cli/nix-hug --help
 ```
 
-## Architecture
+## Commands
 
-The project is split into modular components:
+### `fetch` - Download Models or Datasets
+Downloads Hugging Face models or datasets and generates Nix expressions.
 
-- **lib/**: Nix library modules for declarative model management
-- **cli/**: Command-line interface with bash completion
-- **cache/**: Local cache for hash discovery and file listings
+```bash
+nix-hug fetch <model-or-dataset-url> [options]
+```
 
-This modular design enables easier testing, maintenance, and extension of functionality.
+Options:
+- `--ref REF`: Use specific git reference (default: main)
+- `--include PATTERN`: Include files matching glob pattern
+- `--exclude PATTERN`: Exclude files matching glob pattern
+- `--file FILENAME`: Include specific file by name
+- `--yes, -y`: Auto-confirm operations
+
+### `ls` - List Repository Contents
+Lists files in a model or dataset repository without downloading. Automatically detects whether the repository is a model or dataset.
+
+```bash
+nix-hug ls <model-or-dataset-url> [options]
+```
+
+Options:
+- `--ref REF`: Use specific git reference (default: main)
+- `--include PATTERN`: Include files matching glob pattern
+- `--exclude PATTERN`: Exclude files matching glob pattern
+- `--file FILENAME`: Include specific file by name
+
+Examples:
+```bash
+# List model files
+nix-hug ls mistralai/Mistral-7B-Instruct-v0.3
+
+# List dataset files
+nix-hug ls rajpurkar/squad
+
+# List with filters
+nix-hug ls stanfordnlp/imdb --include '*.parquet'
+
+# List specific file
+nix-hug ls google-bert/bert-base-uncased --file config.json
+```
+
+## URL Formats
+
+Models:
+- `https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3`
+- `hf:mistralai/Mistral-7B-Instruct-v0.3`
+- `mistralai/Mistral-7B-Instruct-v0.3`
+
+Datasets:
+- `https://huggingface.co/datasets/rajpurkar/squad`
+- `hf-datasets:rajpurkar/squad`
+- `datasets/rajpurkar/squad`
+- `rajpurkar/squad` (when using `fetch`)
+
+## Cache Management
+
+The `cache` command helps manage nix-hug's local cache for improved performance:
+
+```bash
+# Clean expired cache entries
+nix-hug cache clean
+
+# Verify cache integrity
+nix-hug cache verify
+
+# Show cache statistics
+nix-hug cache stats
+```
+
+The cache stores discovered hashes and metadata to speed up subsequent operations. Cache entries expire after 24 hours by default.
