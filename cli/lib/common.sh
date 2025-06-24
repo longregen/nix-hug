@@ -2,7 +2,6 @@
 VERSION="3.0.0"
 DEBUG="${DEBUG:-false}"
 
-# Log levels (higher number = more important)
 declare -A LOG_LEVELS=(
     [TRACE]=0
     [DEBUG]=1
@@ -12,10 +11,8 @@ declare -A LOG_LEVELS=(
     [ERROR]=5
 )
 
-# Current log level (can be overridden by LOG_LEVEL env var)
-CURRENT_LOG_LEVEL="${LOG_LEVEL:-TRACE}"
+CURRENT_LOG_LEVEL="${LOG_LEVEL:-OK}"
 
-# Colors using tput for better portability
 if command -v tput >/dev/null 2>&1 && [[ -t 2 ]]; then
     RED=$(tput setaf 1)
     GREEN=$(tput setaf 2)
@@ -80,7 +77,6 @@ check_dependencies() {
     done
 }
 
-# Format file size (optimized for speed)
 format_size() {
     local bytes=$1
     if (( bytes < 1024 )); then
@@ -88,7 +84,6 @@ format_size() {
     elif (( bytes < 1048576 )); then
         echo "$((bytes / 1024)) KB"
     elif (( bytes < 1073741824 )); then
-        # Use awk for floating point arithmetic
         awk "BEGIN { printf \"%.1f MB\", $bytes / 1048576 }"
     else
         awk "BEGIN { printf \"%.1f GB\", $bytes / 1073741824 }"
@@ -100,12 +95,10 @@ parse_url() {
     local url="$1"
     local cleaned
     
-    # Remove common prefixes
     cleaned="${url#https://huggingface.co/}"
     cleaned="${cleaned#http://huggingface.co/}"
     cleaned="${cleaned#hf:}"
     
-    # Split into components
     IFS='/' read -r org repo _ <<< "$cleaned"
     
     if [[ -z "$org" ]] || [[ -z "$repo" ]]; then
@@ -113,13 +106,11 @@ parse_url() {
         return 1
     fi
     
-    # Remove /tree/branch suffix if present
     repo="${repo%%/tree/*}"
     
     echo "{\"org\": \"$org\", \"repo\": \"$repo\", \"repoId\": \"$org/$repo\"}"
 }
 
-# Load flake path
 get_flake_path() {
     echo "${NIX_HUG_FLAKE_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 }

@@ -10,12 +10,21 @@
     let
       forAllSystems = f: nixpkgs.lib.genAttrs flake-utils.lib.defaultSystems f;
       
-      # Create the CLI package
       mkCLI = pkgs: pkgs.stdenv.mkDerivation {
         pname = "nix-hug";
         version = "3.0.0";
         
-        src = ./cli;
+        src = pkgs.lib.fileset.toSource {
+          root = ./cli;
+          fileset = pkgs.lib.fileset.unions [
+            ./cli/nix-hug
+            ./cli/completion.bash
+            ./cli/lib/common.sh
+            ./cli/lib/commands.sh
+            ./cli/lib/hash.sh
+            ./cli/lib/ui.sh
+          ];
+        };
         
         nativeBuildInputs = with pkgs; [ makeWrapper ];
         buildInputs = with pkgs; [ bash jq nix cacert curl ];
@@ -23,17 +32,16 @@
         installPhase = ''
           mkdir -p $out/bin $out/share/nix-hug/lib $out/share/bash-completion/completions
           
-          # Install main script
           cp nix-hug $out/bin/
           chmod +x $out/bin/nix-hug
           
-          # Install library files
-          cp lib/*.sh $out/share/nix-hug/lib/
+          cp lib/common.sh $out/share/nix-hug/lib/
+          cp lib/commands.sh $out/share/nix-hug/lib/
+          cp lib/hash.sh $out/share/nix-hug/lib/
+          cp lib/ui.sh $out/share/nix-hug/lib/
           
-          # Install completions
           cp completion.bash $out/share/bash-completion/completions/nix-hug
           
-          # Wrap with dependencies
           wrapProgram $out/bin/nix-hug \
             --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nix pkgs.jq pkgs.curl ]} \
             --set NIX_HUG_LIB_DIR $out/share/nix-hug/lib \
@@ -64,8 +72,6 @@
           ];
           
           shellHook = ''
-            echo "nix-hug development environment"
-            echo "Run ./cli/nix-hug --help for usage"
             export NIX_HUG_LIB_DIR=$PWD/cli/lib
             export PATH=$PWD/cli:$PATH
           '';

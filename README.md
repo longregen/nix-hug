@@ -8,7 +8,6 @@ Declarative Hugging Face model management for Nix - A complete rewrite with impr
 - **Smart Filtering**: Include/exclude files with regex patterns or specific file lists
 - **Hash Discovery**: Automatic hash discovery and caching
 - **Modular Architecture**: Clean separation between CLI and library components
-- **Performance Optimized**: Caching, parallel downloads, and efficient operations
 - **Developer Friendly**: Comprehensive error handling and helpful output
 
 ## Quick Start
