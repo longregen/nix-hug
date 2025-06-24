@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Load library functions
+NIX_HUG_LIB_DIR="${NIX_HUG_LIB_DIR:-$(dirname "$0")/lib}"
+source "${NIX_HUG_LIB_DIR}/common.sh"
+source "${NIX_HUG_LIB_DIR}/commands.sh"
+source "${NIX_HUG_LIB_DIR}/ui.sh"
+
+# Main entry point
+main() {
+    local command=""
+    
+    # Parse global options
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --debug)
+                DEBUG=true
+                shift
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            --version)
+                echo "nix-hug version ${VERSION}"
+                exit 0
+                ;;
+            fetch|ls)
+                command="$1"
+                shift
+                break
+                ;;
+            *)
+                error "Unknown option or command: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Validate dependencies
+    check_dependencies
+    
+    # Execute command
+    case "$command" in
+        fetch)
+            cmd_fetch "$@"
+            ;;
+        ls)
+            cmd_ls "$@"
+            ;;
+        "")
+            show_help
+            exit 1
+            ;;
+        *)
+            error "Unknown command: $command"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
