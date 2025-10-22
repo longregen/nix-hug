@@ -1,0 +1,55 @@
+name: Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v25
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build nix-hug
+        run: nix build .#nix-hug
+
+      - name: Test CLI - List model files
+        run: |
+          nix run .#nix-hug -- ls stas/tiny-random-llama-2
+
+      - name: Test CLI - Fetch small model
+        run: |
+          nix run .#nix-hug -- fetch stas/tiny-random-llama-2 --yes
+
+      - name: Run flake checks
+        run: nix flake check -L
+
+  matrix-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v25
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build and test
+        run: |
+          nix build .#nix-hug
+          nix run .#nix-hug -- ls stas/tiny-random-llama-2
