@@ -93,6 +93,36 @@ print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 
 The cache structure is compatible with HuggingFace transformers and works offline.
 
+## Cross-Platform Evaluation
+
+As of version 3.1.0, nix-hug supports cross-platform evaluation without Import From Derivation (IFD). This means you can evaluate Nix expressions on one platform (e.g., macOS) for a different target platform (e.g., Linux) without requiring builds during evaluation.
+
+### What This Fixes
+
+Previously, `buildCache` would read metadata from the derivation output during evaluation, which required building the derivation. This caused failures when evaluating on a different architecture:
+
+```
+error: Cannot build 'hf-model-...drv'. Required system: 'aarch64-linux'
+```
+
+### How It Works
+
+- `fetchModel` and `fetchDataset` now attach metadata via `passthru` attributes
+- All required data is available during evaluation (no builds needed)
+- `buildCache` uses `passthru` metadata when available
+- Legacy fallback ensures backward compatibility with older derivations
+
+### Example: Remote Deployment
+
+This now works from macOS targeting Linux:
+
+```bash
+# Evaluate locally on macOS, build remotely on Linux
+deploy --ssh-user user --remote-build .#linux-host
+```
+
+The evaluation completes locally without requiring any builds. Only the actual derivation builds happen remotely on the target system.
+
 ## Installation
 
 ```bash
