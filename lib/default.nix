@@ -168,6 +168,12 @@ let
           outputHash = derivationHash;
           outputHashMode = "recursive";
           outputHashAlgo = "sha256";
+
+          passthru = {
+            inherit (parsed) org repo repoId;
+            revision = repoInfo.resolvedRev;
+            isDataset = false;
+          };
         } ''
         mkdir -p $out
         
@@ -238,6 +244,12 @@ let
           outputHash = derivationHash;
           outputHashMode = "recursive";
           outputHashAlgo = "sha256";
+
+          passthru = {
+            inherit (parsed) org repo repoId;
+            revision = repoInfo.resolvedRev;
+            isDataset = true;
+          };
         } ''
         mkdir -p $out
         
@@ -270,29 +282,38 @@ let
     let
       # Extract info for cache structure - handle both models and datasets
       allItems = models ++ datasets;
-      itemInfos = map (item: 
-        let
-          repoInfoFile = "${item}/.nix-hug-repoinfo.json";
-          repoInfo = if builtins.pathExists repoInfoFile
-            then fromJSON (readFile repoInfoFile)
-            else throw "Item ${item} missing repo info file";
-          
-          itemId = repoInfo.id or (throw "Item repo info missing id field");
-          idParts = lib.splitString "/" itemId;
-          org = builtins.elemAt idParts 0;
-          repo = builtins.elemAt idParts 1;
-          
-          # Determine if this is a dataset based on the item path structure
-          isDataset = lib.hasInfix "hf-dataset-" (toString item);
-          
-          revision = repoInfo.sha or repoInfo.commit or "main";
-        in {
-          inherit item org repo revision isDataset;
-          hubPath = if isDataset 
-            then "hub/datasets--${org}--${repo}"
-            else "hub/models--${org}--${repo}";
-          fullRepoId = "${if isDataset then "dataset" else "model"}:${org}/${repo}";
-        }
+      itemInfos = map (item:
+        if item ? org && item ? repo && item ? revision then
+          # New path: use passthru metadata (no IFD)
+          {
+            inherit item;
+            inherit (item) org repo revision isDataset;
+            hubPath = if item.isDataset
+              then "hub/datasets--${item.org}--${item.repo}"
+              else "hub/models--${item.org}--${item.repo}";
+            fullRepoId = "${if item.isDataset then "dataset" else "model"}:${item.org}/${item.repo}";
+          }
+        else
+          # Legacy fallback: read from derivation output (IFD)
+          let
+            repoInfoFile = "${item}/.nix-hug-repoinfo.json";
+            repoInfo = if builtins.pathExists repoInfoFile
+              then fromJSON (readFile repoInfoFile)
+              else throw "Item ${item} missing repo info file";
+
+            itemId = repoInfo.id or (throw "Item repo info missing id field");
+            idParts = lib.splitString "/" itemId;
+            org = builtins.elemAt idParts 0;
+            repo = builtins.elemAt idParts 1;
+            isDataset = lib.hasInfix "hf-dataset-" (toString item);
+            revision = repoInfo.sha or repoInfo.commit or "main";
+          in {
+            inherit item org repo revision isDataset;
+            hubPath = if isDataset
+              then "hub/datasets--${org}--${repo}"
+              else "hub/models--${org}--${repo}";
+            fullRepoId = "${if isDataset then "dataset" else "model"}:${org}/${repo}";
+          }
       ) allItems;
     in
       pkgs.runCommand "hf-hub-cache"
@@ -326,7 +347,7 @@ in {
     maintainers = [ "nix-hug" ];
   };
   version = {
-    lib = "3.0.0";
+    lib = "3.1.0";
     api = 1;
   };
 }
