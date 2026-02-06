@@ -89,14 +89,13 @@ generate_usage_example() {
     local repo_id="$1"
     local ref="$2"
     local filter_json="$3"
-    local repo_info_hash="$4"
-    local file_tree_hash="$5"
-    local derivation_hash="$6"
-    
+    local file_tree_hash="$4"
+    local derivation_hash="$5"
+
     cat << EOF
 ${BOLD}Usage:${NC}
 
-$(format_fetch_model_call "" "nix-hug-lib" "$repo_id" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "$derivation_hash");
+$(format_fetch_model_call "" "nix-hug-lib" "$repo_id" "$ref" "$filter_json" "$file_tree_hash" "$derivation_hash");
 EOF
 }
 

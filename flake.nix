@@ -108,19 +108,27 @@
         pkgs = nixpkgs.legacyPackages.${system};
         nix-hug-lib = import ./lib { inherit pkgs; };
         
-        # Fetch the tiny-random-llama-2 model
+        # Fetch the tiny-random-llama-2 model (new format with pinned commit)
         tiny-llama = nix-hug-lib.fetchModel {
           url = "stas/tiny-random-llama-2";
+          rev = "3579d71fd57e04f5a364d824d3a2ec3e913dbb67";
+          fileTreeHash = "sha256-mD+VYvxsLFH7+jiumTZYcE3f3kpMKeimaR0eElkT7FI=";
+          derivationHash = "sha256-hjTdeelwUyUqOtJYO3xjQiknWEMG7QGP1a/+BB8sB2M=";
+        };
+
+        # Legacy format test (rev = "main" with repoInfoHash) - should work with deprecation warning
+        tiny-llama-legacy = nix-hug-lib.fetchModel {
+          url = "stas/tiny-random-llama-2";
           rev = "main";
-          repoInfoHash = "sha256-UzhrnF4pogr533B7L0z7x0bPvEBqrrL8TWGe7NeHtIc=";
-          fileTreeHash = "sha256-JRpzHFxfi3/HySzxEjdpqtEdVydSOGIFHQw2bcjCE0M=";
-          derivationHash = "sha256-fVGaNkfWNCtSUJpB6gh+heTt+R/YMoa3xsyZ10x+n7c=";
+          repoInfoHash = "sha256-W3iGjIbEXgDpHG4mKg4ujbKWXDpvElR9t8dWm48qOr8=";
+          fileTreeHash = "sha256-mD+VYvxsLFH7+jiumTZYcE3f3kpMKeimaR0eElkT7FI=";
+          derivationHash = "sha256-0EbPF5eF6nLO65oZDIGW5VRqdI8v00uY5ZpnEiF3/eg=";
         };
 
         # Create cache with the model
         model-cache = nix-hug-lib.buildCache {
           models = [ tiny-llama ];
-          hash = "sha256-k7hdnAXEaP1iuJQhTX0Svx/Zame9zkOvmB5KvkZtH5A=";
+          hash = "sha256-TOBEoJ283jHBrmfpULrnfhiNR3hYSUppylbsoDpGivo=";
         };
       in {
         # Quick build-time test
@@ -188,7 +196,32 @@ EOF
           echo "" | tee -a $out
           echo "buildCache test passed!" | tee -a $out
         '';
-        
+
+        # Test that legacy expressions (rev = "main" + repoInfoHash) still work
+        legacyExpressionTest = pkgs.runCommand "nix-hug-legacy-expression-test" {} ''
+          echo "Testing legacy expression format (rev = main + repoInfoHash)..."
+
+          # Verify the legacy model was built
+          test -d ${tiny-llama-legacy} || { echo "Legacy model not built"; exit 1; }
+
+          # Verify repoinfo.json exists and has expected fields
+          test -f ${tiny-llama-legacy}/.nix-hug-repoinfo.json || { echo "Missing repoinfo"; exit 1; }
+
+          # The legacy format includes the full API response with 'id' field
+          ${pkgs.jq}/bin/jq -e '.id' ${tiny-llama-legacy}/.nix-hug-repoinfo.json > /dev/null || {
+            echo "repoinfo.json missing 'id' field"
+            exit 1
+          }
+
+          # Verify sha field exists (either 'sha' directly or resolved from API)
+          ${pkgs.jq}/bin/jq -e '.sha // .commit' ${tiny-llama-legacy}/.nix-hug-repoinfo.json > /dev/null || {
+            echo "repoinfo.json missing 'sha' field"
+            exit 1
+          }
+
+          echo "Legacy expression test passed!" > $out
+        '';
+
         # NixOS VM test with proper isolation
         buildCacheVMTest = pkgs.nixosTest {
           name = "nix-hug-buildcache-vm-test";

@@ -63,84 +63,96 @@ cmd_fetch() {
         info "Using filters: $filter_json"
     fi
     
+    info "Resolving revision..."
+
+    # Resolve ref to a commit hash via the API
+    local resolved_rev="$ref"
+    if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+        local api_url="https://huggingface.co/api/$repo_id"
+        local api_response
+        api_response=$(curl -sfL "$api_url") || {
+            error "Failed to fetch repository info from $api_url"
+            return 1
+        }
+        resolved_rev=$(echo "$api_response" | jq -r '.sha // empty') || true
+        if [[ -z "$resolved_rev" ]]; then
+            error "Could not resolve ref '$ref' to a commit hash"
+            return 1
+        fi
+        debug "Resolved '$ref' to commit hash: $resolved_rev"
+    fi
+
     info "Discovering required hashes..."
-    
-    # Discover API hashes
-    local repo_info_url="https://huggingface.co/api/$repo_id"
-    local file_tree_url="https://huggingface.co/api/$repo_id/tree/$ref"
-    
-    local repo_info_hash file_tree_hash
-    repo_info_hash=$(discover_hash_fast "$repo_info_url") || {
-        error "Failed to discover hash for repository info"
-        return 1
-    }
-    debug "Repository info hash: $repo_info_hash"
-    
+
+    # Use resolved commit hash in the file tree URL for stability
+    local file_tree_url="https://huggingface.co/api/$repo_id/tree/$resolved_rev"
+
+    local file_tree_hash
     file_tree_hash=$(discover_hash_fast "$file_tree_url") || {
         error "Failed to discover hash for file tree"
         return 1
     }
     debug "File tree hash: $file_tree_hash"
-    
+
     # Branch based on repository type
     if [[ "$repo_type" == "datasets" ]]; then
         # Handle dataset
         info "Building dataset with discovered hashes..."
-        
+
         local derivation_cache_key
-        derivation_cache_key="dataset-derivation:$(echo -n "${repo_id}:${ref}:${filter_json}:${repo_info_hash}:${file_tree_hash}" | sha256sum | cut -d' ' -f1)"
-        
+        derivation_cache_key="dataset-derivation:$(echo -n "${repo_id}:${resolved_rev}:${filter_json}:${file_tree_hash}" | sha256sum | cut -d' ' -f1)"
+
         local cached_derivation_hash
         if cached_derivation_hash=$(cache_get "$derivation_cache_key" 1440); then
             debug "Using cached derivation hash: $cached_derivation_hash"
-            
+
             # Try direct build with cached hash
-            if build_and_report_dataset "$repo_id" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "$cached_derivation_hash"; then
+            if build_and_report_dataset "$repo_id" "$resolved_rev" "$filter_json" "$file_tree_hash" "$cached_derivation_hash"; then
                 return 0
             else
                 warn "Cached derivation hash failed, discovering new hash..."
             fi
         fi
-        
+
         # Discover derivation hash
         local derivation_hash
-        derivation_hash=$(discover_dataset_derivation_hash "$repo_id" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash") || return 1
-        
+        derivation_hash=$(discover_dataset_derivation_hash "$repo_id" "$resolved_rev" "$filter_json" "$file_tree_hash") || return 1
+
         # Cache the discovered hash
         cache_set "$derivation_cache_key" "$derivation_hash"
-        
+
         # Final build
         info "Building final dataset..."
-        build_and_report_dataset "$repo_id" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "$derivation_hash"
+        build_and_report_dataset "$repo_id" "$resolved_rev" "$filter_json" "$file_tree_hash" "$derivation_hash"
     else
         # Handle model
         info "Building model with discovered hashes..."
-        
+
         local derivation_cache_key
-        derivation_cache_key="derivation:$(echo -n "${repo_id}:${ref}:${filter_json}:${repo_info_hash}:${file_tree_hash}" | sha256sum | cut -d' ' -f1)"
-        
+        derivation_cache_key="derivation:$(echo -n "${repo_id}:${resolved_rev}:${filter_json}:${file_tree_hash}" | sha256sum | cut -d' ' -f1)"
+
         local cached_derivation_hash
         if cached_derivation_hash=$(cache_get "$derivation_cache_key" 1440); then
             debug "Using cached derivation hash: $cached_derivation_hash"
-            
+
             # Try direct build with cached hash
-            if build_and_report "$repo_id" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "$cached_derivation_hash"; then
+            if build_and_report "$repo_id" "$resolved_rev" "$filter_json" "$file_tree_hash" "$cached_derivation_hash"; then
                 return 0
             else
                 warn "Cached derivation hash failed, discovering new hash..."
             fi
         fi
-        
+
         # Discover derivation hash
         local derivation_hash
-        derivation_hash=$(discover_derivation_hash "$repo_id" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash") || return 1
-        
+        derivation_hash=$(discover_derivation_hash "$repo_id" "$resolved_rev" "$filter_json" "$file_tree_hash") || return 1
+
         # Cache the discovered hash
         cache_set "$derivation_cache_key" "$derivation_hash"
-        
+
         # Final build
         info "Building final model..."
-        build_and_report "$repo_id" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "$derivation_hash"
+        build_and_report "$repo_id" "$resolved_rev" "$filter_json" "$file_tree_hash" "$derivation_hash"
     fi
 }
 
@@ -202,21 +214,21 @@ cmd_ls() {
 
 # Helper function to build model and report results
 build_and_report() {
-    local repo_id="$1" ref="$2" filter_json="$3" repo_info_hash="$4" file_tree_hash="$5" derivation_hash="$6"
-    
+    local repo_id="$1" ref="$2" filter_json="$3" file_tree_hash="$4" derivation_hash="$5"
+
     # Get bare repo path for Nix expression
     local bare_repo_path
     bare_repo_path=$(get_bare_repo_path "$repo_id")
-    
+
     local expr
-    expr=$(generate_fetch_model_expr "$bare_repo_path" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "$derivation_hash")
-    
+    expr=$(generate_fetch_model_expr "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash" "$derivation_hash")
+
     local store_path
     if store_path=$(build_model_with_expr "$expr" "Final build"); then
         ok "Model downloaded to: $store_path"
-        
+
         # Use bare repo path for usage example
-        generate_usage_example "$bare_repo_path" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "$derivation_hash"
+        generate_usage_example "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash" "$derivation_hash"
         return 0
     else
         error "Failed to build model: $store_path"
@@ -227,21 +239,21 @@ build_and_report() {
 
 # Helper function to build dataset and report results
 build_and_report_dataset() {
-    local repo_id="$1" ref="$2" filter_json="$3" repo_info_hash="$4" file_tree_hash="$5" derivation_hash="$6"
-    
+    local repo_id="$1" ref="$2" filter_json="$3" file_tree_hash="$4" derivation_hash="$5"
+
     # Get bare repo path for Nix expression
     local bare_repo_path
     bare_repo_path=$(get_bare_repo_path "$repo_id")
-    
+
     local expr
-    expr=$(generate_fetch_dataset_expr "$bare_repo_path" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "$derivation_hash")
-    
+    expr=$(generate_fetch_dataset_expr "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash" "$derivation_hash")
+
     local store_path
     if store_path=$(build_dataset_with_expr "$expr" "Final build"); then
         ok "Dataset downloaded to: $store_path"
-        
+
         # Use bare repo path for usage example
-        generate_dataset_usage_example "$bare_repo_path" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "$derivation_hash"
+        generate_dataset_usage_example "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash" "$derivation_hash"
         return 0
     else
         error "Failed to build dataset: $store_path"
@@ -251,14 +263,14 @@ build_and_report_dataset() {
 
 # Helper function to discover dataset derivation hash
 discover_dataset_derivation_hash() {
-    local repo_id="$1" ref="$2" filter_json="$3" repo_info_hash="$4" file_tree_hash="$5"
-    
+    local repo_id="$1" ref="$2" filter_json="$3" file_tree_hash="$4"
+
     # Get bare repo path for Nix expression
     local bare_repo_path
     bare_repo_path=$(get_bare_repo_path "$repo_id")
-    
+
     local expr
-    expr=$(generate_fetch_dataset_expr "$bare_repo_path" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+    expr=$(generate_fetch_dataset_expr "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash" "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
     
     local build_output
     if build_output=$(build_dataset_with_expr "$expr" "Hash discovery" 2>&1); then
@@ -284,14 +296,14 @@ discover_dataset_derivation_hash() {
 
 # Helper function to discover derivation hash
 discover_derivation_hash() {
-    local repo_id="$1" ref="$2" filter_json="$3" repo_info_hash="$4" file_tree_hash="$5"
-    
+    local repo_id="$1" ref="$2" filter_json="$3" file_tree_hash="$4"
+
     # Get bare repo path for Nix expression
     local bare_repo_path
     bare_repo_path=$(get_bare_repo_path "$repo_id")
-    
+
     local expr
-    expr=$(generate_fetch_model_expr "$bare_repo_path" "$ref" "$filter_json" "$repo_info_hash" "$file_tree_hash" "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+    expr=$(generate_fetch_model_expr "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash" "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
     
     local build_output
     if build_output=$(build_model_with_expr "$expr" "Hash discovery" 2>&1); then
