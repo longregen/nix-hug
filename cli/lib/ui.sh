@@ -13,6 +13,9 @@ ${BOLD}COMMANDS:${NC}
     fetch           Download model or dataset and generate Nix expression
     ls              List repository contents without downloading
     cache           Manage local cache (clean, verify, stats)
+    export          Fetch and persist model/dataset to local binary cache
+    import          Restore model/dataset from persistent storage
+    store           Manage persistent storage (ls, path)
 
 ${BOLD}OPTIONS:${NC}
     --debug     Show detailed execution steps
@@ -41,7 +44,142 @@ ${BOLD}EXAMPLES:${NC}
     nix-hug fetch rajpurkar/squad --include '*.json'
     nix-hug fetch stanfordnlp/imdb --include '*.parquet'
 
+${BOLD}PERSIST EXAMPLES:${NC}
+    nix-hug export openai-community/gpt2
+    nix-hug import openai-community/gpt2
+    nix-hug import --all
+    nix-hug store ls
+    nix-hug store path
+
 For more information, visit: https://github.com/longregen/nix-hug
+EOF
+}
+
+# Help for fetch command
+show_fetch_help() {
+    cat << EOF
+${BOLD}Fetch Model or Dataset${NC}
+
+${BOLD}USAGE:${NC}
+    nix-hug fetch <URL> [OPTIONS]
+
+${BOLD}DESCRIPTION:${NC}
+    Downloads a Hugging Face model or dataset and generates a pinned
+    Nix expression for reproducible builds.
+
+${BOLD}OPTIONS:${NC}
+    --ref REF           Use specific git reference (default: main)
+    --include PATTERN   Include LFS files matching glob pattern
+    --exclude PATTERN   Exclude LFS files matching glob pattern
+    --file FILENAME     Include specific file by name
+    --yes, -y           Auto-confirm operations
+    --help              Show this help
+
+${BOLD}EXAMPLES:${NC}
+    nix-hug fetch openai-community/gpt2
+    nix-hug fetch openai-community/gpt2 --ref abc123...
+    nix-hug fetch openai-community/gpt2 --include '*.safetensors'
+    nix-hug fetch microsoft/DialoGPT-medium --yes
+EOF
+}
+
+# Help for ls command
+show_ls_help() {
+    cat << EOF
+${BOLD}List Repository Contents${NC}
+
+${BOLD}USAGE:${NC}
+    nix-hug ls <URL> [OPTIONS]
+
+${BOLD}DESCRIPTION:${NC}
+    Lists files in a Hugging Face repository without downloading.
+
+${BOLD}OPTIONS:${NC}
+    --ref REF           Use specific git reference (default: main)
+    --include PATTERN   Include LFS files matching glob pattern
+    --exclude PATTERN   Exclude LFS files matching glob pattern
+    --file FILENAME     Show specific file by name
+    --help              Show this help
+
+${BOLD}EXAMPLES:${NC}
+    nix-hug ls openai-community/gpt2
+    nix-hug ls openai-community/gpt2 --ref abc123...
+    nix-hug ls openai-community/gpt2 --exclude '*.bin'
+    nix-hug ls google-bert/bert-base-uncased --file config.json
+EOF
+}
+
+# Help for export command
+show_export_help() {
+    cat << EOF
+${BOLD}Export Model/Dataset to Persistent Storage${NC}
+
+${BOLD}USAGE:${NC}
+    nix-hug export <URL> [OPTIONS]
+
+${BOLD}DESCRIPTION:${NC}
+    Fetches the model/dataset (like 'fetch') and copies the store path
+    to a local Nix binary cache for persistence across garbage collection.
+
+${BOLD}OPTIONS:${NC}
+    --ref REF           Use specific git reference (default: main)
+    --include PATTERN   Include files matching glob pattern
+    --exclude PATTERN   Exclude files matching glob pattern
+    --file FILENAME     Include specific file by name
+    --help              Show this help
+
+${BOLD}CONFIGURATION:${NC}
+    Set persist_dir in ~/.config/nix-hug/config or NIX_HUG_PERSIST_DIR env var.
+
+${BOLD}EXAMPLES:${NC}
+    nix-hug export openai-community/gpt2
+    nix-hug export openai-community/gpt2 --include '*.safetensors'
+    NIX_HUG_PERSIST_DIR=/persist/models nix-hug export stas/tiny-random-llama-2
+EOF
+}
+
+# Help for import command
+show_import_help() {
+    cat << EOF
+${BOLD}Import Model/Dataset from Persistent Storage${NC}
+
+${BOLD}USAGE:${NC}
+    nix-hug import [<URL> [--ref REF]] [--all]
+
+${BOLD}DESCRIPTION:${NC}
+    Restores a previously exported model/dataset from the persistent
+    binary cache back into the Nix store.
+
+${BOLD}OPTIONS:${NC}
+    --all       Import all entries from the manifest
+    --ref REF   Match a specific revision
+    --yes, -y, --no-check-sigs
+                Skip trust confirmation (acknowledge unsigned import)
+    --help      Show this help
+
+${BOLD}EXAMPLES:${NC}
+    nix-hug import openai-community/gpt2
+    nix-hug import openai-community/gpt2 --ref abc123...
+    nix-hug import --all
+    nix-hug import --all --yes
+EOF
+}
+
+# Help for store command
+show_store_help() {
+    cat << EOF
+${BOLD}Persistent Storage Management${NC}
+
+${BOLD}USAGE:${NC}
+    nix-hug store <ACTION>
+
+${BOLD}ACTIONS:${NC}
+    ls, list    List all models/datasets in persistent storage
+    path        Print the configured persist directory
+
+${BOLD}EXAMPLES:${NC}
+    nix-hug store ls
+    nix-hug store path
 EOF
 }
 
@@ -95,6 +233,20 @@ generate_usage_example() {
 ${BOLD}Usage:${NC}
 
 $(format_fetch_model_call "" "nix-hug-lib" "$repo_id" "$ref" "$filter_json" "$file_tree_hash");
+EOF
+}
+
+# Generate dataset usage example after fetch
+generate_dataset_usage_example() {
+    local repo_id="$1"
+    local ref="$2"
+    local filter_json="$3"
+    local file_tree_hash="$4"
+
+    cat << EOF
+${BOLD}Usage:${NC}
+
+$(format_fetch_dataset_call "" "nix-hug-lib" "$repo_id" "$ref" "$filter_json" "$file_tree_hash");
 EOF
 }
 

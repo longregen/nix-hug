@@ -11,7 +11,7 @@ declare -A LOG_LEVELS=(
     [ERROR]=5
 )
 
-CURRENT_LOG_LEVEL="${LOG_LEVEL:-OK}"
+CURRENT_LOG_LEVEL="${CURRENT_LOG_LEVEL:-${LOG_LEVEL:-INFO}}"
 
 # Optimized color detection - only check once
 if [[ -z "${NIX_HUG_COLORS_INITIALIZED:-}" ]]; then
@@ -23,14 +23,22 @@ if [[ -z "${NIX_HUG_COLORS_INITIALIZED:-}" ]]; then
         BOLD=$(tput bold)
         DIM=$(tput dim)
         NC=$(tput sgr0)
+    elif [[ -t 2 ]]; then
+        RED=$'\033[0;31m'
+        GREEN=$'\033[0;32m'
+        BLUE=$'\033[0;34m'
+        YELLOW=$'\033[0;33m'
+        BOLD=$'\033[1m'
+        DIM=$'\033[2m'
+        NC=$'\033[0m'
     else
-        RED='\033[0;31m'
-        GREEN='\033[0;32m'
-        BLUE='\033[0;34m'
-        YELLOW='\033[0;33m'
-        BOLD='\033[1m'
-        DIM='\033[2m'
-        NC='\033[0m'
+        RED=''
+        GREEN=''
+        BLUE=''
+        YELLOW=''
+        BOLD=''
+        DIM=''
+        NC=''
     fi
     export NIX_HUG_COLORS_INITIALIZED=1
 fi
@@ -42,6 +50,82 @@ mkdir -p "$TMPDIR" 2>/dev/null || export TMPDIR="/tmp"
 # Cache directory
 CACHE_DIR="${NIX_HUG_CACHE_DIR:-${HOME}/.cache/nix-hug}"
 mkdir -p "$CACHE_DIR"
+
+# Configuration file support
+NIX_HUG_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nix-hug"
+NIX_HUG_CONFIG_FILE="$NIX_HUG_CONFIG_DIR/config"
+
+# Trim leading and trailing whitespace from a string
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    echo "$s"
+}
+
+# Load config file (key=value format, ignores comments and blank lines)
+load_config() {
+    declare -gA NIX_HUG_CONFIG=()
+    if [[ -f "$NIX_HUG_CONFIG_FILE" ]]; then
+        while IFS= read -r line; do
+            # Skip blank lines and comments
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            # Require '=' separator
+            [[ "$line" != *=* ]] && continue
+            # Split on first '=' only
+            local key="${line%%=*}"
+            local value="${line#*=}"
+            key=$(trim "$key")
+            value=$(trim "$value")
+            [[ -z "$key" ]] && continue
+            NIX_HUG_CONFIG["$key"]="$value"
+        done < "$NIX_HUG_CONFIG_FILE"
+    fi
+}
+
+# Get config value (env var overrides config file)
+get_config() {
+    local key="$1"
+    local default="${2:-}"
+    local env_var="NIX_HUG_${key^^}"
+
+    # Env var takes priority
+    if [[ -n "${!env_var:-}" ]]; then
+        echo "${!env_var}"
+        return 0
+    fi
+
+    # Then config file
+    if [[ -n "${NIX_HUG_CONFIG[$key]:-}" ]]; then
+        echo "${NIX_HUG_CONFIG[$key]}"
+        return 0
+    fi
+
+    # Default
+    echo "$default"
+}
+
+# Load config on source
+load_config
+
+# Persist settings (env vars NIX_HUG_PERSIST_DIR / NIX_HUG_AUTO_PERSIST override config)
+PERSIST_DIR=$(get_config "persist_dir" "")
+AUTO_PERSIST=$(get_config "auto_persist" "false")
+
+# Nix store prefix — respects NIX_STORE_DIR if set (defaults to /nix/store)
+NIX_STORE="${NIX_STORE_DIR:-/nix/store}"
+
+# Extract the store path from build output (nix build --print-out-paths)
+# Handles custom NIX_STORE_DIR locations
+extract_store_path() {
+    local build_output="$1"
+    local store_path
+    store_path=$(echo "$build_output" | grep "^${NIX_STORE}/" | tail -1)
+    if [[ -z "$store_path" ]]; then
+        return 1
+    fi
+    echo "$store_path"
+}
 
 # Unified logging function with hierarchical levels
 log() {

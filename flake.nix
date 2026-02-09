@@ -2,8 +2,8 @@
   description = "nix-hug - Declarative Hugging Face model management for Nix";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "git+ssh://gitea/mirrors/nixpkgs?shallow=1";
+    flake-utils.url = "git+ssh://gitea/mirrors/flake-utils";
   };
 
   outputs =
@@ -19,7 +19,7 @@
         pkgs:
         pkgs.stdenv.mkDerivation {
           pname = "nix-hug";
-          version = "1.0.1";
+          version = "3.0.0";
 
           src = pkgs.lib.fileset.toSource {
             root = ./.;
@@ -30,6 +30,7 @@
               ./cli/lib/commands.sh
               ./cli/lib/hash.sh
               ./cli/lib/nix-expr.sh
+              ./cli/lib/persist.sh
               ./cli/lib/ui.sh
               ./lib/default.nix
             ];
@@ -55,6 +56,7 @@
             cp cli/lib/commands.sh $out/share/nix-hug/lib/
             cp cli/lib/hash.sh $out/share/nix-hug/lib/
             cp cli/lib/nix-expr.sh $out/share/nix-hug/lib/
+            cp cli/lib/persist.sh $out/share/nix-hug/lib/
             cp cli/lib/ui.sh $out/share/nix-hug/lib/
 
             cp cli/completion.bash $out/share/bash-completion/completions/nix-hug
@@ -79,7 +81,7 @@
               with specific revisions and creation of offline caches.
             '';
             homepage = "https://github.com/longregen/nix-hug";
-            changelog = "https://github.com/longregen/nix-hug/releases/tag/v1.0.1";
+            changelog = "https://github.com/longregen/nix-hug/releases/tag/v3.0.0";
             license = licenses.mit;
             platforms = platforms.all;
             mainProgram = "nix-hug";
@@ -138,19 +140,19 @@
             fileTreeHash = "sha256-mD+VYvxsLFH7+jiumTZYcE3f3kpMKeimaR0eElkT7FI=";
           };
 
-          # Legacy format test (rev = "main" with repoInfoHash) - should work with deprecation warning
+          # Legacy format test (rev = "main" with repoInfoHash) — backward compat
           tiny-llama-legacy = nix-hug-lib.fetchModel {
             url = "stas/tiny-random-llama-2";
             rev = "main";
-            repoInfoHash = "sha256-Mz7ypSo8O99ofyEPbCLH3ksELe9IEvWN1qMAVhmmW9U=";
+            repoInfoHash = "sha256-nb/AxxIlDtrLyWIqS/8ipgwb9lIotQQeBakEKeMAPyM=";
             fileTreeHash = "sha256-mD+VYvxsLFH7+jiumTZYcE3f3kpMKeimaR0eElkT7FI=";
-            derivationHash = "sha256-Dwgy5eYmagY23kqOApd0g8MxPz9qSFx5QNWzQ9M6F6E=";
+            derivationHash = "sha256-2Ub1Ov8gVrOgGsphaR154tuGUHaDLbVxRBpOPQCbuiY=";
           };
 
           # Create cache with the model
           model-cache = nix-hug-lib.buildCache {
             models = [ tiny-llama ];
-            hash = "sha256-TOBEoJ283jHBrmfpULrnfhiNR3hYSUppylbsoDpGivo=";
+            hash = "sha256-psQcpC+BAfAFpu7P5T1+VXAPSytrq4GcfqiY2KWAU8g=";
           };
         in
         {
@@ -254,7 +256,7 @@
           '';
 
           # NixOS VM test with proper isolation
-          buildCacheVMTest = pkgs.nixosTest {
+          buildCacheVMTest = pkgs.testers.nixosTest {
             name = "nix-hug-buildcache-vm-test";
 
             nodes.machine =

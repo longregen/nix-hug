@@ -16,6 +16,7 @@ main() {
         case $1 in
             --debug)
                 DEBUG=true
+                export CURRENT_LOG_LEVEL=DEBUG
                 shift
                 ;;
             --help|-h)
@@ -26,7 +27,7 @@ main() {
                 echo "nix-hug version ${VERSION}"
                 exit 0
                 ;;
-            fetch|ls|cache)
+            fetch|ls|cache|export|import|store)
                 command="$1"
                 shift
                 break
@@ -52,6 +53,15 @@ main() {
             ;;
         cache)
             cmd_cache "$@"
+            ;;
+        export)
+            cmd_export "$@"
+            ;;
+        import)
+            cmd_import "$@"
+            ;;
+        store)
+            cmd_store "$@"
             ;;
         "")
             show_help

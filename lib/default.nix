@@ -156,7 +156,7 @@ let
         mkdir -p $out
 
         # Copy git files
-        cp -r ${gitRepo}/* $out/
+        cp -rT ${gitRepo} $out/
         chmod -R +w $out
 
         # Copy LFS files from their individual derivations
@@ -228,7 +228,7 @@ let
         mkdir -p $out
 
         # Copy git files
-        cp -r ${gitRepo}/* $out/
+        cp -rT ${gitRepo} $out/
         chmod -R +w $out
 
         # Copy LFS files from their individual derivations
