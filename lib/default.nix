@@ -114,9 +114,8 @@ let
     rev,
     filters ? null,
     repoInfoHash ? null,  # deprecated — kept for backward compat
-    # All hashes must be provided
     fileTreeHash,
-    derivationHash
+    derivationHash ? null,  # deprecated — kept for backward compat
   }:
     let
       parsed = mkRepoId url false;
@@ -149,11 +148,11 @@ let
         }) filteredLfsFiles;
       in
       pkgs.runCommand "hf-model-${repoInfo.org}-${repoInfo.repo}-${repoInfo.resolvedRev}"
-        {
+        (optionalAttrs (derivationHash != null) {
           outputHash = derivationHash;
           outputHashMode = "recursive";
           outputHashAlgo = "sha256";
-        } ''
+        }) ''
         mkdir -p $out
 
         # Copy git files
@@ -186,9 +185,8 @@ let
     rev,
     filters ? null,
     repoInfoHash ? null,  # deprecated — kept for backward compat
-    # All hashes must be provided
     fileTreeHash,
-    derivationHash
+    derivationHash ? null,  # deprecated — kept for backward compat
   }:
     let
       parsed = mkRepoId url true;
@@ -222,11 +220,11 @@ let
         }) filteredLfsFiles;
       in
       pkgs.runCommand "hf-dataset-${repoInfo.org}-${repoInfo.repo}-${repoInfo.resolvedRev}"
-        {
+        (optionalAttrs (derivationHash != null) {
           outputHash = derivationHash;
           outputHashMode = "recursive";
           outputHashAlgo = "sha256";
-        } ''
+        }) ''
         mkdir -p $out
 
         # Copy git files

@@ -8,20 +8,17 @@ format_fetch_model_call() {
     local ref="$4"
     local filter_json="$5"
     local file_tree_hash="$6"
-    local derivation_hash="$7"
 
     local filter_line=""
     if [[ "$filter_json" != "null" ]]; then
-        filter_line="${indent}  filters = $filter_json;"
+        filter_line=$'\n'"${indent}  filters = $filter_json;"
     fi
 
     cat << EOF
 ${indent}$lib.fetchModel {
 ${indent}  url = "$repo_id";
-${indent}  rev = "$ref";
-$filter_line
+${indent}  rev = "$ref";$filter_line
 ${indent}  fileTreeHash = "$file_tree_hash";
-${indent}  derivationHash = "$derivation_hash";
 ${indent}}
 EOF
 }
@@ -32,14 +29,13 @@ generate_fetch_model_expr() {
     local ref="$2"
     local filter_json="$3"
     local file_tree_hash="$4"
-    local derivation_hash="$5"
 
     cat <<EOF
 let
   flake = builtins.getFlake "$(get_flake_path)";
   lib = flake.lib.\${builtins.currentSystem};
 in
-  $(format_fetch_model_call "  " "lib" "$repo_id" "$ref" "$filter_json" "$file_tree_hash" "$derivation_hash")
+  $(format_fetch_model_call "  " "lib" "$repo_id" "$ref" "$filter_json" "$file_tree_hash")
 EOF
 }
 
@@ -69,20 +65,17 @@ format_fetch_dataset_call() {
     local ref="$4"
     local filter_json="$5"
     local file_tree_hash="$6"
-    local derivation_hash="$7"
 
     local filter_line=""
     if [[ "$filter_json" != "null" ]]; then
-        filter_line="${indent}  filters = $filter_json;"
+        filter_line=$'\n'"${indent}  filters = $filter_json;"
     fi
 
     cat << EOF
 ${indent}$lib.fetchDataset {
 ${indent}  url = "$repo_id";
-${indent}  rev = "$ref";
-$filter_line
+${indent}  rev = "$ref";$filter_line
 ${indent}  fileTreeHash = "$file_tree_hash";
-${indent}  derivationHash = "$derivation_hash";
 ${indent}}
 EOF
 }
@@ -93,14 +86,13 @@ generate_fetch_dataset_expr() {
     local ref="$2"
     local filter_json="$3"
     local file_tree_hash="$4"
-    local derivation_hash="$5"
 
     cat <<EOF
 let
   flake = builtins.getFlake "$(get_flake_path)";
   lib = flake.lib.\${builtins.currentSystem};
 in
-  $(format_fetch_dataset_call "  " "lib" "$repo_id" "$ref" "$filter_json" "$file_tree_hash" "$derivation_hash")
+  $(format_fetch_dataset_call "  " "lib" "$repo_id" "$ref" "$filter_json" "$file_tree_hash")
 EOF
 }
 
@@ -122,55 +114,25 @@ build_dataset_with_expr() {
     fi
 }
 
-# Extract derivation hash from build error output
-extract_derivation_hash() {
-    local build_output="$1"
-
-    # Try to find SRI format hash first (sha256-...)
-    local sri_hash
-    sri_hash=$(echo "$build_output" | grep -o 'sha256-[A-Za-z0-9+/=]*' | tail -1)
-
-    if [[ -n "$sri_hash" ]]; then
-        echo "$sri_hash"
-        return 0
-    fi
-
-    # Look for bare hash in quotes (52 characters, base32-encoded)
-    local bare_hash
-    bare_hash=$(echo "$build_output" | grep -oE "'[0-9a-z]{52}'" | sed "s/'//g" | tail -1)
-
-    if [[ -n "$bare_hash" ]]; then
-        # Convert to SRI format
-        echo "sha256-$bare_hash"
-        return 0
-    fi
-
-    # If no hash found, return empty
-    return 1
-}
-
 # Generate dataset usage example
 generate_dataset_usage_example() {
     local repo_id="$1"
     local ref="$2"
     local filter_json="$3"
     local file_tree_hash="$4"
-    local derivation_hash="$5"
 
     echo -e "${BOLD}Usage:${NC}\n"
 
     local filter_line=""
     if [[ "$filter_json" != "null" ]]; then
-        filter_line="  filters = $filter_json;"
+        filter_line=$'\n'"  filters = $filter_json;"
     fi
 
     cat <<EOF
 nix-hug-lib.fetchDataset {
   url = "$repo_id";
-  rev = "$ref";
-$filter_line
+  rev = "$ref";$filter_line
   fileTreeHash = "$file_tree_hash";
-  derivationHash = "$derivation_hash";
 }
 EOF
 }
@@ -181,13 +143,12 @@ generate_usage_example() {
     local ref="$2"
     local filter_json="$3"
     local file_tree_hash="$4"
-    local derivation_hash="$5"
 
     echo -e "\n${BLUE}To use this model in a Nix expression:${NC}"
 
     local filter_line=""
     if [[ "$filter_json" != "null" ]]; then
-        filter_line="    filters = $filter_json;"
+        filter_line=$'\n'"    filters = $filter_json;"
     fi
 
     cat <<EOF
@@ -197,10 +158,8 @@ generate_usage_example() {
   in
     lib.fetchModel {
       url = "$repo_id";
-      rev = "$ref";
-$filter_line
+      rev = "$ref";$filter_line
       fileTreeHash = "$file_tree_hash";
-      derivationHash = "$derivation_hash";
     }
 EOF
 }

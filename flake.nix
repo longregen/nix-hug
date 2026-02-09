@@ -131,21 +131,20 @@
           pkgs = nixpkgs.legacyPackages.${system};
           nix-hug-lib = import ./lib { inherit pkgs; };
 
-          # Fetch the tiny-random-llama-2 model (new format with pinned commit)
+          # Fetch the tiny-random-llama-2 model (new format — single hash)
           tiny-llama = nix-hug-lib.fetchModel {
             url = "stas/tiny-random-llama-2";
             rev = "3579d71fd57e04f5a364d824d3a2ec3e913dbb67";
             fileTreeHash = "sha256-mD+VYvxsLFH7+jiumTZYcE3f3kpMKeimaR0eElkT7FI=";
-            derivationHash = "sha256-hjTdeelwUyUqOtJYO3xjQiknWEMG7QGP1a/+BB8sB2M=";
           };
 
           # Legacy format test (rev = "main" with repoInfoHash) - should work with deprecation warning
           tiny-llama-legacy = nix-hug-lib.fetchModel {
             url = "stas/tiny-random-llama-2";
             rev = "main";
-            repoInfoHash = "sha256-W3iGjIbEXgDpHG4mKg4ujbKWXDpvElR9t8dWm48qOr8=";
+            repoInfoHash = "sha256-Mz7ypSo8O99ofyEPbCLH3ksELe9IEvWN1qMAVhmmW9U=";
             fileTreeHash = "sha256-mD+VYvxsLFH7+jiumTZYcE3f3kpMKeimaR0eElkT7FI=";
-            derivationHash = "sha256-0EbPF5eF6nLO65oZDIGW5VRqdI8v00uY5ZpnEiF3/eg=";
+            derivationHash = "sha256-Dwgy5eYmagY23kqOApd0g8MxPz9qSFx5QNWzQ9M6F6E=";
           };
 
           # Create cache with the model
