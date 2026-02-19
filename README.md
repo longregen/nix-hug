@@ -19,7 +19,7 @@ nix-hug-lib.fetchModel {
   fileTreeHash = "sha256-...";
 };
 ```
-The output can then be used in your nix configuration:
+The output can then be used in nix:
 ```nix
 # Smoke test: an app that just loads the model in python
 let
