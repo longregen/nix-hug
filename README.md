@@ -73,7 +73,8 @@ in
   }
 ```
 
-Python then finds the model without network access:
+Running Python within this shell will find the model without network
+access (the `transformers` lib reads the env variable `HF_HUG_CACHE`):
 
 ```python
 from transformers import AutoModelForCausalLM
@@ -82,16 +83,23 @@ model = AutoModelForCausalLM.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3
 
 ## How It Works
 
-When you run `nix-hug fetch`, the CLI resolves the git ref (for example,
-`main`) to a commit hash via the Hugging Face API. It then fetches the
-repository's file tree metadata and computes a SHA256 hash of the response.
-The output is a Nix expression that pins both values.
+For fetching, `nix-hug fetch` is a bash-based CLI that resolves the git ref
+(`main`) to a commit hash via the Hugging Face API. It then fetches the
+repository's file tree metadata and computes a SHA256 hash of how the directory
+structure for consumption by HuggingFace libraries will look like. The output
+of the CLI is a Nix expression that pins that "`fileTreeHash`" and stores
+the git ref.
 
-When Nix evaluates that expression, `fetchGit` clones the Hugging Face
+When consuming it, the nix-based `lib` evaluates that expression, and executes
+the same steps that the bash-based CLI does: `fetchGit` clones the Hugging Face
 repository at the pinned revision. This retrieves all small files (configs,
 tokenizer data, etc.) but only LFS pointer files for large weights. For each
-LFS file that matches your filters, `fetchurl` downloads it from Hugging
-Face's CDN using the LFS SHA256 OID as the content hash. A derivation
+LFS file then `fetchurl` downloads it from HuggingFace's CDN using the LFS SHA256
+OID as the content hash. Filters can be provided to selectively download some of
+these large filters, in case the repository contains a lot of model files that
+you don't need (for example, one might want only one particular large
+".safetensors" file from a repository that has also ONNX files, or many
+quantizations together in the same repo). A derivation
 assembles the result: the git checkout with real model files replacing the LFS
 pointers.
 
@@ -109,7 +117,8 @@ hub/
 
 Set `HF_HUB_CACHE` to this store path and any library that reads from the Hub
 cache (`transformers`, `diffusers`, `sentence-transformers`) will find the
-model without making network requests.
+model without making network requests. Please note that `datasets` is known to
+cause problems sometimes (contributions welcome).
 
 Everything is content-addressed. The same inputs produce the same store paths.
 Models can be shared across machines, cached in CI, and pinned in lockfiles
@@ -206,8 +215,7 @@ $ nix-hug fetch google-bert/bert-base-uncased --file config.json
 ```
 
 The CLI auto-detects whether a repository is a model or dataset by querying
-the Hugging Face API. You can also use explicit URL formats to skip detection
-(see [URL Formats](#url-formats)).
+the Hugging Face API.
 
 ### `ls`
 
@@ -222,8 +230,10 @@ $ nix-hug ls stanfordnlp/imdb --include '*.parquet'
 ### `export`
 
 Fetches a model or dataset and copies the store path to persistent local
-storage. Models exported this way survive `nix-collect-garbage`. Requires
-`persist_dir` to be configured (see [Persistent Storage](#persistent-storage)).
+storage. Requires `persist_dir` to be configured (see
+[Persistent Storage](#persistent-storage)). The result is similar to using
+`nix-hug fetch` with the `--out` argument, in that the files get copied
+outside of the nix store, and thus won't be garbage-collected.
 
 Accepts the same filter options as `fetch`.
 
@@ -271,8 +281,7 @@ The library is available as `nix-hug.lib.${system}` from the flake output.
 
 ### fetchModel / fetchDataset
 
-Fetch a model or dataset from Hugging Face and return a store path containing
-all files.
+Fetch a model or dataset from Hugging Face and returns a derivation.
 
 ```nix
 nix-hug-lib.fetchModel {
@@ -336,8 +345,8 @@ $ python your_script.py
 ## Persistent Storage
 
 Models in `/nix/store/` are removed by `nix-collect-garbage` when no GC root
-references them. For models that are expensive to re-download, the persistent
-storage feature provides a local binary cache.
+references them. For models that are expensive to re-download, this is a handy
+feature to keep models outside of nix.
 
 ### Configuration
 
@@ -348,7 +357,7 @@ persist_dir=/persist/models
 auto_persist=false
 ```
 
-Or set environment variables (these take precedence):
+Or set environment variables (these take precedence over the config file's values):
 
 ```bash
 export NIX_HUG_PERSIST_DIR=/persist/models
@@ -377,6 +386,9 @@ When `auto_persist` is set to `true`, the `fetch` command handles persistence
 automatically. Before building, it checks the manifest and restores the model
 from the binary cache if the store path was collected. After building, it
 exports the result.
+
+This only affects the CLI. The nix library is not affected by `import`,
+`export`, or the configuration file.
 
 ```bash
 export NIX_HUG_PERSIST_DIR=/persist/models
@@ -420,10 +432,6 @@ Run the tests:
 $ nix flake check
 $ nix flake check ./test
 ```
-
-The project uses [ShellCheck](https://www.shellcheck.net/) for bash linting
-and [nixpkgs-fmt](https://github.com/nix-community/nixpkgs-fmt) for Nix
-formatting.
 
 ## License
 
