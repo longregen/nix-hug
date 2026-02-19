@@ -196,8 +196,6 @@ Options:
 - `--include PATTERN`: Include files matching glob pattern
 - `--exclude PATTERN`: Exclude files matching glob pattern
 - `--file FILENAME`: Include specific file by name
-- `--yes, -y`: Auto-confirm operations
-
 ### `ls` - List Repository Contents
 Lists files in a model or dataset repository without downloading. Automatically detects whether the repository is a model or dataset.
 
@@ -342,27 +340,6 @@ Datasets:
 - `hf-datasets:rajpurkar/squad`
 - `datasets/rajpurkar/squad`
 - `rajpurkar/squad` (the CLI queries the Hugging Face API to auto-detect whether a bare `org/repo` is a model or dataset)
-
-## Cache Management
-
-The `cache` command manages nix-hug's local hash/metadata cache (`~/.cache/nix-hug`, or `$NIX_HUG_CACHE_DIR` if set). This cache speeds up subsequent operations by storing discovered hashes. Entries expire after 24 hours by default.
-
-```bash
-# Clean expired cache entries (default: older than 24h)
-nix-hug cache clean
-
-# Clean entries older than 1 hour
-nix-hug cache clean --max-age 60
-
-# Verify cache integrity
-nix-hug cache verify
-
-# Repair cache corruption
-nix-hug cache repair
-
-# Show cache statistics
-nix-hug cache stats
-```
 
 ## Development
 

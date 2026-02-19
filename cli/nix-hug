@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Load library functions
 NIX_HUG_LIB_DIR="${NIX_HUG_LIB_DIR:-$(dirname "$0")/lib}"
 source "${NIX_HUG_LIB_DIR}/common.sh"
 source "${NIX_HUG_LIB_DIR}/commands.sh"
 source "${NIX_HUG_LIB_DIR}/ui.sh"
 
-# Main entry point
 main() {
     local command=""
     
-    # Parse global options
     while [[ $# -gt 0 ]]; do
         case $1 in
             --debug)
@@ -27,7 +24,7 @@ main() {
                 echo "nix-hug version ${VERSION}"
                 exit 0
                 ;;
-            fetch|ls|cache|export|import|store)
+            fetch|ls|export|import|store)
                 command="$1"
                 shift
                 break
@@ -39,20 +36,20 @@ main() {
                 ;;
         esac
     done
-    
-    # Validate dependencies
+
+    if [[ -z "$command" ]]; then
+        show_help
+        exit 1
+    fi
+
     check_dependencies
-    
-    # Execute command
+
     case "$command" in
         fetch)
             cmd_fetch "$@"
             ;;
         ls)
             cmd_ls "$@"
-            ;;
-        cache)
-            cmd_cache "$@"
             ;;
         export)
             cmd_export "$@"
@@ -62,14 +59,6 @@ main() {
             ;;
         store)
             cmd_store "$@"
-            ;;
-        "")
-            show_help
-            exit 1
-            ;;
-        *)
-            error "Unknown command: $command"
-            exit 1
             ;;
     esac
 }

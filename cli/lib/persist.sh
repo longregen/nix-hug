@@ -1,7 +1,3 @@
-# Persistent storage functions for nix-hug
-# Manages export/import of Nix store paths to a local binary cache
-
-# Ensure persist_dir is configured; error if not
 require_persist_dir() {
     if [[ -z "$PERSIST_DIR" ]]; then
         error "No persist directory configured."
@@ -11,18 +7,15 @@ require_persist_dir() {
     fi
 }
 
-# Initialize persist directory structure
 init_persist_dir() {
     require_persist_dir || return 1
     mkdir -p "$PERSIST_DIR"
 }
 
-# Manifest file path
 manifest_path() {
     echo "$PERSIST_DIR/nix-hug-manifest.json"
 }
 
-# Read manifest, returning empty array if missing or empty
 manifest_read() {
     local mpath
     mpath=$(manifest_path)
@@ -33,7 +26,6 @@ manifest_read() {
     fi
 }
 
-# Write manifest atomically (expects JSON on stdin or as $1)
 manifest_write() {
     local mpath
     mpath=$(manifest_path)
@@ -49,8 +41,6 @@ manifest_write() {
     fi
 }
 
-# Look up a manifest entry by repoId (and optionally rev)
-# Returns the entry JSON or empty string
 manifest_lookup() {
     local repo_id="$1"
     local rev="${2:-}"
@@ -61,13 +51,11 @@ manifest_lookup() {
         echo "$manifest" | jq -e --arg id "$repo_id" --arg rev "$rev" \
             '[.[] | select(.repoId == $id and .rev == $rev)] | sort_by(.exportedAt) | last // empty' 2>/dev/null
     else
-        # Return most recent entry for this repoId
         echo "$manifest" | jq -e --arg id "$repo_id" \
             '[.[] | select(.repoId == $id)] | sort_by(.exportedAt) | last // empty' 2>/dev/null
     fi
 }
 
-# Add or update a manifest entry
 manifest_add() {
     local repo_id="$1"
     local type="$2"
@@ -81,11 +69,9 @@ manifest_add() {
     local exported_at
     exported_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-    # Remove existing entry with same repoId + rev
     manifest=$(echo "$manifest" | jq --arg id "$repo_id" --arg rev "$rev" \
         '[.[] | select(.repoId != $id or .rev != $rev)]')
 
-    # Append new entry
     local entry
     entry=$(jq -n \
         --arg repoId "$repo_id" \
@@ -107,7 +93,6 @@ manifest_add() {
     manifest_write "$manifest"
 }
 
-# Export a store path to the persistent binary cache
 persist_export() {
     local store_path="$1"
     local repo_id="$2"
@@ -128,10 +113,7 @@ persist_export() {
     fi
 }
 
-# Prompt user to confirm import trust (only for interactive imports)
-# Sets PERSIST_IMPORT_TRUSTED=true if user confirms or was already confirmed
 confirm_import_trust() {
-    # Already confirmed in this session
     [[ "${PERSIST_IMPORT_TRUSTED:-}" == "true" ]] && return 0
 
     warn "Importing uses --no-check-sigs (signatures are not verified)."
@@ -152,14 +134,11 @@ confirm_import_trust() {
                 ;;
         esac
     else
-        # Non-interactive — refuse unless explicitly trusted
         error "Non-interactive session: pass --yes or --no-check-sigs to acknowledge unsigned import"
         return 1
     fi
 }
 
-# Import a store path from the persistent binary cache
-# Set PERSIST_IMPORT_TRUSTED=true to skip the confirmation prompt (e.g. auto-persist)
 persist_import() {
     local store_path="$1"
 
@@ -175,16 +154,12 @@ persist_import() {
     fi
 }
 
-# Try to import a store path if it exists in the manifest and is not valid in store
-# Returns 0 if path is now valid (either already was or imported), 1 if not available
-# Called from auto-persist (user already opted in via config), so skip trust prompt
 persist_try_import() {
     local repo_id="$1"
     local rev="$2"
 
     [[ -z "$PERSIST_DIR" ]] && return 1
 
-    # Auto-persist is an explicit opt-in — trust the local cache
     PERSIST_IMPORT_TRUSTED=true
 
     local entry
@@ -194,14 +169,12 @@ persist_try_import() {
     local store_path
     store_path=$(echo "$entry" | jq -r '.storePath')
 
-    # Check if already valid
     if nix-store --check-validity "$store_path" 2>/dev/null; then
         debug "Store path already valid: $store_path"
         echo "$store_path"
         return 0
     fi
 
-    # Try to import
     if persist_import "$store_path"; then
         echo "$store_path"
         return 0
@@ -210,7 +183,6 @@ persist_try_import() {
     return 1
 }
 
-# List all entries in the manifest
 persist_list() {
     require_persist_dir || return 1
 
@@ -225,7 +197,7 @@ persist_list() {
         return 0
     fi
 
-    printf "${BOLD}%-40s %-10s %-12s %-20s %s${NC}\n" "REPOSITORY" "TYPE" "REV" "EXPORTED" "STATUS"
+    printf '%s%-40s %-10s %-12s %-20s %s%s\n' "$BOLD" "REPOSITORY" "TYPE" "REV" "EXPORTED" "STATUS" "$NC"
 
     echo "$manifest" | jq -c '.[]' | while IFS= read -r entry; do
         local repo_id type rev exported store_path
@@ -235,12 +207,9 @@ persist_list() {
         exported=$(echo "$entry" | jq -r '.exportedAt')
         store_path=$(echo "$entry" | jq -r '.storePath')
 
-        # Shorten rev for display
         local short_rev="${rev:0:12}"
-        # Shorten date
         local short_date="${exported%T*}"
 
-        # Check validity
         local status=""
         if nix-store --check-validity "$store_path" 2>/dev/null; then
             status="${GREEN}valid${NC}"

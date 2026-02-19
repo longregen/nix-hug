@@ -1,5 +1,3 @@
-# UI and formatting functions
-
 source "${NIX_HUG_LIB_DIR}/nix-expr.sh"
 
 show_help() {
@@ -12,7 +10,6 @@ ${BOLD}USAGE:${NC}
 ${BOLD}COMMANDS:${NC}
     fetch           Download model or dataset and generate Nix expression
     ls              List repository contents without downloading
-    cache           Manage local cache (clean, verify, stats)
     export          Fetch and persist model/dataset to local binary cache
     import          Restore model/dataset from persistent storage
     store           Manage persistent storage (ls, path)
@@ -27,7 +24,8 @@ ${BOLD}FETCH OPTIONS:${NC}
     --include PATTERN   Include files matching glob pattern
     --exclude PATTERN   Exclude files matching glob pattern
     --file FILENAME     Include specific file by name
-    --yes, -y           Auto-confirm operations
+    --out DIR, -o DIR   Copy result to a regular folder (avoids ~/.cache/nix bloat)
+    --override          Allow overwriting a non-empty --out directory
 
 ${BOLD}LS OPTIONS:${NC}
     --ref REF           Use specific git reference (default: main)
@@ -40,11 +38,26 @@ ${BOLD}EXAMPLES:${NC}
     nix-hug fetch openai-community/gpt2 --include '*.safetensors'
     nix-hug ls openai-community/gpt2 --exclude '*.bin'
     nix-hug ls google-bert/bert-base-uncased --file config.json
-    nix-hug fetch microsoft/DialoGPT-medium --yes
     nix-hug fetch rajpurkar/squad --include '*.json'
     nix-hug fetch stanfordnlp/imdb --include '*.parquet'
 
-${BOLD}PERSIST EXAMPLES:${NC}
+${BOLD}DOWNLOAD TO A FOLDER:${NC}
+    # Fetch directly into a regular writable folder:
+    nix-hug fetch openai-community/gpt2 --out ~/models/gpt2
+    nix-hug fetch mistralai/Mistral-7B-Instruct-v0.3 --include '*.safetensors' --out ~/models/mistral
+
+    # Add back to Nix store later (content-addressed, see 'import --help'):
+    nix-hug import --path ~/models/gpt2
+
+    # Or symlink from the store path (no extra disk space):
+    nix-hug fetch openai-community/gpt2
+    ln -s /nix/store/...-gpt2 ~/models/gpt2
+
+    # Point HuggingFace tools directly at the store path:
+    HF_HUB_CACHE=/nix/store/...-gpt2 python my_script.py
+
+${BOLD}PERSIST & OFFLINE BUILDS:${NC}
+    # To preserve exact store paths (e.g. for offline nix build), use export/import:
     nix-hug export openai-community/gpt2
     nix-hug import openai-community/gpt2
     nix-hug import --all
@@ -55,7 +68,6 @@ For more information, visit: https://github.com/longregen/nix-hug
 EOF
 }
 
-# Help for fetch command
 show_fetch_help() {
     cat << EOF
 ${BOLD}Fetch Model or Dataset${NC}
@@ -67,23 +79,26 @@ ${BOLD}DESCRIPTION:${NC}
     Downloads a Hugging Face model or dataset and generates a pinned
     Nix expression for reproducible builds.
 
+    With --out, the result is also copied to a regular writable folder.
+    Use 'nix-hug import --path DIR' to add it back to the Nix store.
+
 ${BOLD}OPTIONS:${NC}
     --ref REF           Use specific git reference (default: main)
     --include PATTERN   Include LFS files matching glob pattern
     --exclude PATTERN   Exclude LFS files matching glob pattern
     --file FILENAME     Include specific file by name
-    --yes, -y           Auto-confirm operations
+    --out DIR, -o DIR   Copy result to a regular writable folder
+    --override          Allow overwriting a non-empty --out directory
     --help              Show this help
 
 ${BOLD}EXAMPLES:${NC}
     nix-hug fetch openai-community/gpt2
     nix-hug fetch openai-community/gpt2 --ref abc123...
     nix-hug fetch openai-community/gpt2 --include '*.safetensors'
-    nix-hug fetch microsoft/DialoGPT-medium --yes
+    nix-hug fetch openai-community/gpt2 --out ~/models/gpt2
 EOF
 }
 
-# Help for ls command
 show_ls_help() {
     cat << EOF
 ${BOLD}List Repository Contents${NC}
@@ -109,7 +124,6 @@ ${BOLD}EXAMPLES:${NC}
 EOF
 }
 
-# Help for export command
 show_export_help() {
     cat << EOF
 ${BOLD}Export Model/Dataset to Persistent Storage${NC}
@@ -138,21 +152,30 @@ ${BOLD}EXAMPLES:${NC}
 EOF
 }
 
-# Help for import command
 show_import_help() {
     cat << EOF
 ${BOLD}Import Model/Dataset from Persistent Storage${NC}
 
 ${BOLD}USAGE:${NC}
-    nix-hug import [<URL> [--ref REF]] [--all]
+    nix-hug import [<URL> [--ref REF]] [--all] [--path DIR]
 
 ${BOLD}DESCRIPTION:${NC}
-    Restores a previously exported model/dataset from the persistent
-    binary cache back into the Nix store.
+    Restores a previously exported model/dataset back into the Nix store.
+
+    Without --path, restores from the persistent binary cache (exact
+    store path preserved — use this for offline nix build / nix develop).
+
+    With --path, imports a directory created by 'fetch --out'. The files
+    are added as a content-addressed store path, which will differ from
+    the original derivation output path. This is useful for getting the
+    files back into /nix/store for direct use, but will not satisfy
+    derivation references from flake expressions. For exact store path
+    restoration, use 'nix-hug export' / 'nix-hug import' instead.
 
 ${BOLD}OPTIONS:${NC}
     --all       Import all entries from the manifest
     --ref REF   Match a specific revision
+    --path DIR  Import from a directory created by fetch --out
     --yes, -y, --no-check-sigs
                 Skip trust confirmation (acknowledge unsigned import)
     --help      Show this help
@@ -162,10 +185,10 @@ ${BOLD}EXAMPLES:${NC}
     nix-hug import openai-community/gpt2 --ref abc123...
     nix-hug import --all
     nix-hug import --all --yes
+    nix-hug import --path ~/models/gpt2
 EOF
 }
 
-# Help for store command
 show_store_help() {
     cat << EOF
 ${BOLD}Persistent Storage Management${NC}
@@ -183,7 +206,6 @@ ${BOLD}EXAMPLES:${NC}
 EOF
 }
 
-# Display file listing with optimized formatting
 display_files() {
     local files="$1"
     local header="$2"
@@ -195,7 +217,6 @@ display_files() {
     local lfs_count=0
     local lfs_size=0
     
-    # Process files in a single pass
     while IFS= read -r file; do
         local path size is_lfs
         path=$(echo "$file" | jq -r '.path')
@@ -222,75 +243,59 @@ display_files() {
     fi
 }
 
-# Generate usage example after fetch - optimized template
 generate_usage_example() {
-    local repo_id="$1"
-    local ref="$2"
-    local filter_json="$3"
-    local file_tree_hash="$4"
+    local nix_func="$1"
+    local repo_id="$2"
+    local ref="$3"
+    local filter_json="$4"
+    local file_tree_hash="$5"
 
     cat << EOF
 ${BOLD}Usage:${NC}
 
-$(format_fetch_model_call "" "nix-hug-lib" "$repo_id" "$ref" "$filter_json" "$file_tree_hash");
+$(format_fetch_call "" "nix-hug-lib" "$nix_func" "$repo_id" "$ref" "$filter_json" "$file_tree_hash");
 EOF
 }
 
-# Generate dataset usage example after fetch
-generate_dataset_usage_example() {
-    local repo_id="$1"
-    local ref="$2"
-    local filter_json="$3"
-    local file_tree_hash="$4"
-
-    cat << EOF
-${BOLD}Usage:${NC}
-
-$(format_fetch_dataset_call "" "nix-hug-lib" "$repo_id" "$ref" "$filter_json" "$file_tree_hash");
-EOF
-}
-
-# Display filtered files with improved logic
 display_filtered_files() {
     local files="$1"
     shift
     local filters=("$@")
     
-    # Parse filter arguments
     local filter_type=""
     local patterns=()
-    
+    local file_names=()
+
     for ((i=0; i<${#filters[@]}; i+=2)); do
         local flag="${filters[i]}"
         local pattern="${filters[i+1]}"
-        
+
         case "$flag" in
             --include) filter_type="include" ;;
             --exclude) filter_type="exclude" ;;
             --file) filter_type="file" ;;
         esac
-        
-        # Convert glob to regex for jq
-        pattern=$(echo "$pattern" | sed 's/\*/\.\*/g; s/\?/\./g; s/$/$/;')
-        patterns+=("$pattern")
+
+        if [[ "$flag" == "--file" ]]; then
+            file_names+=("$pattern")
+        else
+            patterns+=("$(glob_to_regex "$pattern")$")
+        fi
     done
-    
-    # Apply filter with jq
+
     local filtered_files
     if [[ "$filter_type" == "include" ]]; then
         local pattern_regex
         pattern_regex=$(IFS='|'; echo "${patterns[*]}")
-        # Include matching LFS files + all non-LFS files
         filtered_files=$(echo "$files" | jq --arg regex "$pattern_regex" '[.[] | select((.path | test($regex)) or (has("lfs") | not))]')
     elif [[ "$filter_type" == "exclude" ]]; then
         local pattern_regex
         pattern_regex=$(IFS='|'; echo "${patterns[*]}")
-        # Exclude matching LFS files but keep all non-LFS files
         filtered_files=$(echo "$files" | jq --arg regex "$pattern_regex" '[.[] | select((.path | test($regex) | not) or (has("lfs") | not))]')
     elif [[ "$filter_type" == "file" ]]; then
-        # For --file, match exact filename
-        local filename="${filters[1]}"
-        filtered_files=$(echo "$files" | jq --arg file "$filename" '[.[] | select(.path == $file)]')
+        local names_json
+        names_json=$(printf '%s\n' "${file_names[@]}" | jq -R . | jq -s .)
+        filtered_files=$(echo "$files" | jq --argjson names "$names_json" '[.[] | select(.path as $p | $names | any(. == $p))]')
     else
         filtered_files="$files"
     fi

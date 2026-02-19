@@ -2,24 +2,28 @@
   description = "nix-hug - Declarative Hugging Face model management for Nix";
 
   inputs = {
-    nixpkgs.url = "git+ssh://gitea/mirrors/nixpkgs?shallow=1";
-    flake-utils.url = "git+ssh://gitea/mirrors/flake-utils";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   };
 
   outputs =
     {
       self,
       nixpkgs,
-      flake-utils,
     }:
     let
-      forAllSystems = f: nixpkgs.lib.genAttrs flake-utils.lib.defaultSystems f;
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
       mkCLI =
         pkgs:
         pkgs.stdenv.mkDerivation {
           pname = "nix-hug";
-          version = "3.0.0";
+          version = "4.0.0";
 
           src = pkgs.lib.fileset.toSource {
             root = ./.;
@@ -81,7 +85,7 @@
               with specific revisions and creation of offline caches.
             '';
             homepage = "https://github.com/longregen/nix-hug";
-            changelog = "https://github.com/longregen/nix-hug/releases/tag/v3.0.0";
+            changelog = "https://github.com/longregen/nix-hug/releases/tag/v4.0.0";
             license = licenses.mit;
             platforms = platforms.all;
             mainProgram = "nix-hug";
@@ -89,18 +93,20 @@
         };
 
     in
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = nixpkgs.legacyPackages.${system};
-      in
-      {
-        packages = {
-          default = mkCLI pkgs;
+    {
+      packages = forAllSystems (
+        pkgs:
+        let
           nix-hug = mkCLI pkgs;
-        };
+        in
+        {
+          inherit nix-hug;
+          default = nix-hug;
+        }
+      );
 
-        devShells.default = pkgs.mkShell {
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShell {
           buildInputs = with pkgs; [
             nix
             jq
@@ -108,6 +114,7 @@
             shellcheck
             nixpkgs-fmt
             curl
+            (mkCLI pkgs)
           ];
 
           shellHook = ''
@@ -115,22 +122,20 @@
             export PATH=$PWD/cli:$PATH
           '';
         };
+      });
 
-        apps = {
-          default = {
-            type = "app";
-            program = "${self.packages.${system}.default}/bin/nix-hug";
-          };
+      apps = forAllSystems (pkgs: {
+        default = {
+          type = "app";
+          program = "${mkCLI pkgs}/bin/nix-hug";
         };
-      }
-    )
-    // {
-      lib = forAllSystems (system: import ./lib { pkgs = nixpkgs.legacyPackages.${system}; });
+      });
+
+      lib = forAllSystems (pkgs: import ./lib { inherit pkgs; });
 
       checks = forAllSystems (
-        system:
+        pkgs:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
           nix-hug-lib = import ./lib { inherit pkgs; };
 
           # Fetch the tiny-random-llama-2 model (new format — single hash)
@@ -168,25 +173,23 @@
                     ]
                   ))
                 ];
-                # Ensure network isolation for the test
-                __noChroot = false;
               }
               ''
-                          echo "Testing buildCache with tiny-random-llama-2 model..." | tee $out
+                echo "Testing buildCache with tiny-random-llama-2 model..." | tee $out
 
-                          export HF_HUB_CACHE=${model-cache}
-                          export TRANSFORMERS_OFFLINE=1
-                          
-                          echo "" | tee -a $out
-                          echo "HF_HUB_CACHE: $HF_HUB_CACHE" | tee -a $out
-                          echo "" | tee -a $out
-                          echo "Cache contents:" | tee -a $out
-                          find $HF_HUB_CACHE -type f | head -20 | tee -a $out
-                          
-                          echo "" | tee -a $out
-                          echo "Running Python test script..." | tee -a $out
-                          
-                          cat > test-cache.py << 'EOF'
+                export HF_HUB_CACHE=${model-cache}
+                export TRANSFORMERS_OFFLINE=1
+
+                echo "" | tee -a $out
+                echo "HF_HUB_CACHE: $HF_HUB_CACHE" | tee -a $out
+                echo "" | tee -a $out
+                echo "Cache contents:" | tee -a $out
+                find $HF_HUB_CACHE -type f | head -20 | tee -a $out
+
+                echo "" | tee -a $out
+                echo "Running Python test script..." | tee -a $out
+
+                cat > test-cache.py << 'EOF'
                 from transformers import AutoModelForCausalLM, AutoTokenizer
                 import os
 
@@ -224,10 +227,10 @@
                 print(f"Tokenizer type: {type(tokenizer)}")
                 EOF
                           
-                          python3 test-cache.py 2>&1 | tee -a $out
-                          
-                          echo "" | tee -a $out
-                          echo "buildCache test passed!" | tee -a $out
+                python3 test-cache.py 2>&1 | tee -a $out
+
+                echo "" | tee -a $out
+                echo "buildCache test passed!" | tee -a $out
               '';
 
           # Test that legacy expressions (rev = "main" + repoInfoHash) still work
@@ -260,13 +263,12 @@
             name = "nix-hug-buildcache-vm-test";
 
             nodes.machine =
-              { config, pkgs, ... }:
+              { pkgs, ... }:
               {
-                virtualisation.memorySize = 2048;
-                virtualisation.diskSize = 8192;
-
-                # No network access
-                virtualisation.vlans = [ ];
+                virtualisation = {
+                  memorySize = 2048;
+                  diskSize = 8192;
+                };
 
                 environment.systemPackages = with pkgs; [
                   (python3.withPackages (
@@ -290,8 +292,6 @@
               # Verify no network access
               machine.fail("ping -c 1 8.8.8.8")
               machine.fail("ping -c 1 huggingface.co")
-
-              print("Network isolation confirmed")
 
               # Create test script
               machine.succeed("""cat > /tmp/test-cache.py << 'EOF'
