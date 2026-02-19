@@ -5,10 +5,49 @@
 [![CI](https://github.com/longregen/nix-hug/actions/workflows/ci.yml/badge.svg)](https://github.com/longregen/nix-hug/actions/workflows/ci.yml)
 ![Version](https://img.shields.io/badge/version-4.0.0-green)
 
-Declarative Hugging Face model and dataset management for Nix. nix-hug pins
+Declarative Hugging Face model and dataset management for Nix. `nix-hug` pins
 models to exact revisions, fetches only the files you need, builds
-offline-compatible HuggingFace Hub caches, and persists store paths through
+offline-compatible HuggingFace Hub caches, and helps persist models regardless of
 garbage collection.
+
+The CLI is used to download models into the nix store:
+```bash
+$ nix run github:longregen/nix-hug -- fetch MiniMaxAI/MiniMax-M2.5
+nix-hug-lib.fetchModel {
+  url = "MiniMaxAI/MiniMax-M2.5";
+  rev = "abc123...";
+  fileTreeHash = "sha256-...";
+};
+```
+The output can then be used in your nix configuration:
+```nix
+# Smoke test: an app that just loads the model in python
+let
+  minimax = nix-hug-lib.fetchModel {
+    url = "MiniMaxAI/MiniMax-M2.5";
+    rev = "abc123...";
+    fileTreeHash = "sha256-...";
+  };
+  cache = nix-hug-lib.buildCache {
+    models = [ minimax ];
+    hash = lib.fakeHash;
+  };
+  python = pkgs.python3.withPackages (p: [ p.transformers p.torch ]);
+in
+  pkgs.writeShellApplication {
+    name = "say-minimax-inefficiently";
+    runtimeInputs = [ python ];
+    text = ''
+      export HF_HUB_CACHE=${cache}
+      export TRANSFORMERS_OFFLINE=1
+      python -c "
+        from transformers import AutoModelForCausalLM
+        model = AutoModelForCausalLM.from_pretrained('MiniMaxAI/MiniMax-M2.5')
+        print(model)
+      "
+    '';
+  }
+```
 
 ## Table of Contents
 
@@ -74,7 +113,7 @@ in
 ```
 
 Running Python within this shell will find the model without network
-access (the `transformers` lib reads the env variable `HF_HUG_CACHE`):
+access (the `transformers` lib reads the env variable `HF_HUB_CACHE`):
 
 ```python
 from transformers import AutoModelForCausalLM
@@ -83,7 +122,7 @@ model = AutoModelForCausalLM.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3
 
 ## How It Works
 
-For fetching, `nix-hug fetch` is a bash-based CLI that resolves the git ref
+`nix-hug` is a bash-based CLI whose `fetch` subcommand resolves the git ref
 (`main`) to a commit hash via the Hugging Face API. It then fetches the
 repository's file tree metadata and computes a SHA256 hash of how the directory
 structure for consumption by HuggingFace libraries will look like. The output
