@@ -145,15 +145,6 @@
             fileTreeHash = "sha256-mD+VYvxsLFH7+jiumTZYcE3f3kpMKeimaR0eElkT7FI=";
           };
 
-          # Legacy format test (rev = "main" with repoInfoHash) — backward compat
-          tiny-llama-legacy = nix-hug-lib.fetchModel {
-            url = "stas/tiny-random-llama-2";
-            rev = "main";
-            repoInfoHash = "sha256-nb/AxxIlDtrLyWIqS/8ipgwb9lIotQQeBakEKeMAPyM=";
-            fileTreeHash = "sha256-mD+VYvxsLFH7+jiumTZYcE3f3kpMKeimaR0eElkT7FI=";
-            derivationHash = "sha256-2Ub1Ov8gVrOgGsphaR154tuGUHaDLbVxRBpOPQCbuiY=";
-          };
-
           # Create cache with the model
           model-cache = nix-hug-lib.buildCache {
             models = [ tiny-llama ];
