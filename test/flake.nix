@@ -2,8 +2,8 @@
   description = "nix-hug standalone integration test";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs";
     nix-hug.url = "path:..";
+    nixpkgs.follows = "nix-hug/nixpkgs";
   };
 
   outputs =
