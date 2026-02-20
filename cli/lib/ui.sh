@@ -143,7 +143,7 @@ ${BOLD}OPTIONS:${NC}
     --help              Show this help
 
 ${BOLD}CONFIGURATION:${NC}
-    Set persist_dir in ~/.config/nix-hug/config or NIX_HUG_PERSIST_DIR env var.
+    Set persist_dir in ${NIX_HUG_CONFIG_FILE} or NIX_HUG_PERSIST_DIR env var.
 
 ${BOLD}EXAMPLES:${NC}
     nix-hug export openai-community/gpt2

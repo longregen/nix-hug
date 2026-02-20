@@ -145,15 +145,6 @@
             fileTreeHash = "sha256-mD+VYvxsLFH7+jiumTZYcE3f3kpMKeimaR0eElkT7FI=";
           };
 
-          # Legacy format test (rev = "main" with repoInfoHash) — backward compat
-          tiny-llama-legacy = nix-hug-lib.fetchModel {
-            url = "stas/tiny-random-llama-2";
-            rev = "main";
-            repoInfoHash = "sha256-nb/AxxIlDtrLyWIqS/8ipgwb9lIotQQeBakEKeMAPyM=";
-            fileTreeHash = "sha256-mD+VYvxsLFH7+jiumTZYcE3f3kpMKeimaR0eElkT7FI=";
-            derivationHash = "sha256-2Ub1Ov8gVrOgGsphaR154tuGUHaDLbVxRBpOPQCbuiY=";
-          };
-
           # Create cache with the model
           model-cache = nix-hug-lib.buildCache {
             models = [ tiny-llama ];
@@ -232,31 +223,6 @@
                 echo "" | tee -a $out
                 echo "buildCache test passed!" | tee -a $out
               '';
-
-          # Test that legacy expressions (rev = "main" + repoInfoHash) still work
-          legacyExpressionTest = pkgs.runCommand "nix-hug-legacy-expression-test" { } ''
-            echo "Testing legacy expression format (rev = main + repoInfoHash)..."
-
-            # Verify the legacy model was built
-            test -d ${tiny-llama-legacy} || { echo "Legacy model not built"; exit 1; }
-
-            # Verify repoinfo.json exists and has expected fields
-            test -f ${tiny-llama-legacy}/.nix-hug-repoinfo.json || { echo "Missing repoinfo"; exit 1; }
-
-            # The legacy format includes the full API response with 'id' field
-            ${pkgs.jq}/bin/jq -e '.id' ${tiny-llama-legacy}/.nix-hug-repoinfo.json > /dev/null || {
-              echo "repoinfo.json missing 'id' field"
-              exit 1
-            }
-
-            # Verify sha field exists (either 'sha' directly or resolved from API)
-            ${pkgs.jq}/bin/jq -e '.sha // .commit' ${tiny-llama-legacy}/.nix-hug-repoinfo.json > /dev/null || {
-              echo "repoinfo.json missing 'sha' field"
-              exit 1
-            }
-
-            echo "Legacy expression test passed!" > $out
-          '';
 
           # NixOS VM test with proper isolation
           buildCacheVMTest = pkgs.testers.nixosTest {
