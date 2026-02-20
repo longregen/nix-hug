@@ -96,20 +96,20 @@
               export TRANSFORMERS_OFFLINE=1
 
               python3 -c "
-                from transformers import AutoModelForCausalLM, AutoTokenizer
-                import os, sys
+              from transformers import AutoModelForCausalLM, AutoTokenizer
+              import os, sys
                 
-                cache = os.environ['HF_HUB_CACHE']
-                snap = os.path.join(cache, 'hub', 'models--stas--tiny-random-llama-2', 'snapshots')
-                revs = os.listdir(snap)
-                assert len(revs) == 1, f'Expected 1 snapshot, got {len(revs)}'
-                path = os.path.join(snap, revs[0])
-                
-                model = AutoModelForCausalLM.from_pretrained(path, local_files_only=True)
-                tok   = AutoTokenizer.from_pretrained(path, local_files_only=True)
-                print(f'Model: {type(model).__name__}')
-                print(f'Tokenizer: {type(tok).__name__}')
-                print('Python load test passed!')
+              cache = os.environ['HF_HUB_CACHE']
+              snap = os.path.join(cache, 'hub', 'models--stas--tiny-random-llama-2', 'snapshots')
+              revs = os.listdir(snap)
+              assert len(revs) == 1, f'Expected 1 snapshot, got {len(revs)}'
+              path = os.path.join(snap, revs[0])
+
+              model = AutoModelForCausalLM.from_pretrained(path, local_files_only=True)
+              tok   = AutoTokenizer.from_pretrained(path, local_files_only=True)
+              print(f'Model: {type(model).__name__}')
+              print(f'Tokenizer: {type(tok).__name__}')
+              print('Python load test passed!')
               " 2>&1 | tee $out
             '';
 
