@@ -122,11 +122,11 @@ model = AutoModelForCausalLM.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3
 
 ## How It Works
 
-`nix-hug` is a bash-based CLI whose `fetch` subcommand resolves the git ref
-(`main`) to a commit hash via the Hugging Face API. It then fetches the
-repository's file tree metadata and computes a SHA256 hash of how the directory
-structure for consumption by HuggingFace libraries will look like. The output
-of the CLI is a Nix expression that pins that "`fileTreeHash`" and stores
+`nix-hug` has two parts: a bash-based CLI, and a nix library. The CLI's `fetch`
+subcommand resolves the git ref to a commit hash via the Hugging Face API. It then
+fetches the repository's file tree metadata and computes a SHA256 hash of how the
+directory structure for consumption by HuggingFace libraries will look like. The
+output of the CLI is a Nix expression that pins that "`fileTreeHash`" and stores
 the git ref.
 
 When consuming it, the nix-based `lib` evaluates that expression, and executes
@@ -389,7 +389,7 @@ feature to keep models outside of nix.
 
 ### Configuration
 
-Create `~/.config/nix-hug/config`:
+Create `~/.config/nix-hug/config` (format ini, respects $XDG_CONFIG_HOME):
 
 ```ini
 persist_dir=/persist/models
