@@ -232,7 +232,7 @@ display_files() {
         else
             printf "  %-50s %10s\n" "$path" "$(format_size "$size")"
         fi
-    done < <(echo "$files" | jq -c '.[]')
+    done < <(echo "$files" | jq -c '.[] | select(.type != "directory")')
     
     echo
     echo -n "Total: $(format_size "$total_size")"
@@ -287,17 +287,17 @@ display_filtered_files() {
     if [[ "$filter_type" == "include" ]]; then
         local pattern_regex
         pattern_regex=$(IFS='|'; echo "${patterns[*]}")
-        filtered_files=$(echo "$files" | jq --arg regex "$pattern_regex" '[.[] | select((.path | test($regex)) or (has("lfs") | not))]')
+        filtered_files=$(echo "$files" | jq --arg regex "$pattern_regex" '[.[] | select(.type != "directory") | select((.path | test($regex)) or (has("lfs") | not))]')
     elif [[ "$filter_type" == "exclude" ]]; then
         local pattern_regex
         pattern_regex=$(IFS='|'; echo "${patterns[*]}")
-        filtered_files=$(echo "$files" | jq --arg regex "$pattern_regex" '[.[] | select((.path | test($regex) | not) or (has("lfs") | not))]')
+        filtered_files=$(echo "$files" | jq --arg regex "$pattern_regex" '[.[] | select(.type != "directory") | select((.path | test($regex) | not) or (has("lfs") | not))]')
     elif [[ "$filter_type" == "file" ]]; then
         local names_json
         names_json=$(printf '%s\n' "${file_names[@]}" | jq -R . | jq -s .)
-        filtered_files=$(echo "$files" | jq --argjson names "$names_json" '[.[] | select(.path as $p | $names | any(. == $p))]')
+        filtered_files=$(echo "$files" | jq --argjson names "$names_json" '[.[] | select(.type != "directory") | select(.path as $p | $names | any(. == $p))]')
     else
-        filtered_files="$files"
+        filtered_files=$(echo "$files" | jq '[.[] | select(.type != "directory")]')
     fi
     
     echo "Files matching filters: ${filters[@]@Q}"

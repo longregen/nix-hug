@@ -83,7 +83,7 @@ cmd_fetch() {
 
     info "Discovering file tree hash..."
 
-    local file_tree_url="https://huggingface.co/api/$repo_id/tree/$resolved_rev"
+    local file_tree_url="https://huggingface.co/api/$repo_id/tree/$resolved_rev?recursive=true"
 
     local file_tree_hash
     file_tree_hash=$(discover_hash_fast "$file_tree_url") || {
@@ -333,7 +333,7 @@ cmd_export() {
     local resolved_rev
     resolved_rev=$(resolve_ref "$ref" "$repo_id") || return 1
 
-    local file_tree_url="https://huggingface.co/api/$repo_id/tree/$resolved_rev"
+    local file_tree_url="https://huggingface.co/api/$repo_id/tree/$resolved_rev?recursive=true"
     local file_tree_hash
     file_tree_hash=$(discover_hash_fast "$file_tree_url") || {
         error "Failed to discover hash for file tree"

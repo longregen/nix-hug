@@ -95,15 +95,15 @@ let
             Run `nix-hug fetch ${repoId}` to generate a pinned expression.'';
 
       fileTreeData = fromJSON (readFile (fetchurl {
-        url = "${apiBase}/${repoId}/tree/${rev}";
+        url = "${apiBase}/${repoId}/tree/${rev}?recursive=true";
         sha256 = fileTreeHash;
       }));
 
     in {
       inherit org repo repoId rev resolvedRev repoInfoFetched;
-      files = fileTreeData;
+      files = lib.filter (f: (f.type or "") != "directory") fileTreeData;
       lfsFiles = lib.filter (f: f ? lfs) fileTreeData;
-      nonLfsFiles = lib.filter (f: !(f ? lfs)) fileTreeData;
+      nonLfsFiles = lib.filter (f: !(f ? lfs) && (f.type or "") != "directory") fileTreeData;
     };
 
   fetchRepo = isDataset: {
@@ -157,6 +157,7 @@ let
         chmod -R +w $out
 
         ${builtins.concatStringsSep "\n" (map (lfsFile: ''
+          mkdir -p "$out/$(dirname "${lfsFile.name}")"
           cp ${lfsFile.drv} "$out/${lfsFile.name}"
         '') lfsDerivations)}
 
@@ -168,7 +169,7 @@ let
         }
 
         cp ${fetchurl {
-          url = "https://huggingface.co/api/${typeApi}/${repoInfo.repoId}/tree/${rev}";
+          url = "https://huggingface.co/api/${typeApi}/${repoInfo.repoId}/tree/${rev}?recursive=true";
           sha256 = fileTreeHash;
         }} $out/.nix-hug-filetree.json
       '';
@@ -215,7 +216,7 @@ let
       '';
 
 in {
-  inherit fetchModel fetchDataset buildCache;
+  inherit fetchModel fetchDataset buildCache applyFilter;
   meta = {
     description = "A library for fetching Hugging Face models";
     maintainers = [ "nix-hug" ];
