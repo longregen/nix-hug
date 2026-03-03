@@ -44,12 +44,10 @@ build_with_expr() {
     debug "$operation_name expression: $expr"
 
     local build_output
-    if build_output=$(nix --extra-experimental-features 'nix-command flakes' build --impure --expr "$expr" --no-link --print-out-paths 2>&1); then
+    if build_output=$(nix --extra-experimental-features 'nix-command flakes' build --impure --expr "$expr" --no-link --print-out-paths); then
         echo "$build_output"
         return 0
     else
-        debug "$operation_name output: $build_output"
-        echo "$build_output" >&2
         return 1
     fi
 }

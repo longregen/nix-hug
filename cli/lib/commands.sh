@@ -1,33 +1,47 @@
+# shellcheck source=/dev/null
 source "${NIX_HUG_LIB_DIR}/hash.sh"
+# shellcheck source=/dev/null
 source "${NIX_HUG_LIB_DIR}/nix-expr.sh"
-source "${NIX_HUG_LIB_DIR}/persist.sh"
+
+# Pre-populate fetchurl store paths for LFS files so `nix build` skips downloads.
+# Uses nix-store --add-fixed sha256, which produces the same store path as fetchurl.
+# Args: store_path [file_tree_json]
+#   If file_tree_json is empty, reads from $store_path/.nix-hug-filetree.json
+prepopulate_lfs_store_paths() {
+    local store_path="$1"
+    local file_tree="${2:-}"
+
+    if [[ -z "$file_tree" && -f "$store_path/.nix-hug-filetree.json" ]]; then
+        file_tree=$(< "$store_path/.nix-hug-filetree.json")
+    fi
+    [[ -z "$file_tree" ]] && return 0
+
+    local lfs_paths
+    lfs_paths=$(echo "$file_tree" | jq -r '.[] | select(has("lfs")) | .path') || return 0
+    [[ -z "$lfs_paths" ]] && return 0
+
+    info "Registering LFS files for nix build..."
+    while IFS= read -r lfs_path; do
+        [[ -z "$lfs_path" ]] && continue
+        local lfs_file="$store_path/$lfs_path"
+        if [[ -f "$lfs_file" ]]; then
+            nix-store --add-fixed sha256 "$lfs_file" >/dev/null 2>&1 || true
+        fi
+    done <<< "$lfs_paths"
+}
 
 cmd_fetch() {
     local url=""
     local ref="main"
     local filters=()
-    local out_dir=""
-    local override=false
+    local dry_run=false
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --ref)
-                [[ -z "${2:-}" || "$2" == -* ]] && { error "--ref requires an argument"; return 1; }
-                ref="$2"
-                shift 2
-                ;;
-            --include|--exclude|--file)
-                [[ -z "${2:-}" || "$2" == -* ]] && { error "$1 requires an argument"; return 1; }
-                filters+=("$1" "$2")
-                shift 2
-                ;;
-            --out|-o)
-                [[ -z "${2:-}" || "$2" == -* ]] && { error "--out requires a directory argument"; return 1; }
-                out_dir="$2"
-                shift 2
-                ;;
-            --override)
-                override=true
+            --ref) require_arg "${2:-}" "--ref" || return 1; ref="$2"; shift 2 ;;
+            --include|--exclude|--file) require_arg "${2:-}" "$1" || return 1; filters+=("$1" "$2"); shift 2 ;;
+            --dry-run)
+                dry_run=true
                 shift
                 ;;
             --help|-h)
@@ -47,56 +61,61 @@ cmd_fetch() {
 
     [[ -z "$url" ]] && { error "No repository URL specified"; return 1; }
 
-    if [[ "$override" == "true" && -z "$out_dir" ]]; then
-        warn "--override has no effect without --out"
-    fi
-
-    if [[ -n "$out_dir" ]]; then
-        validate_out_dir "$out_dir" || return 1
-    fi
-
-    local sanitized_url
-    sanitized_url=$(sanitize_hf_url "$url") || return 1
-
-    local parsed
-    parsed=$(parse_url "$sanitized_url") || return 1
-
-    local repo_id repo_type
-    repo_id=$(echo "$parsed" | jq -r '.repoId')
-    repo_type=$(echo "$parsed" | jq -r '.type')
-
-    local display_name
-    display_name=$(get_display_name "$repo_id")
-    info "Retrieving information for $display_name ($ref)..."
+    resolve_repo "$url" || return 1
+    # shellcheck disable=SC2154  # set by resolve_repo
+    local repo_id="$_repo_id" repo_type="$_repo_type"
+    # shellcheck disable=SC2154
+    local bare_repo_path="$_bare_repo_path"
+    # shellcheck disable=SC2154
+    info "Retrieving information for $_display_name ($ref)..."
 
     local filter_json
     filter_json=$(create_filter_json_fast "${filters[@]}") || return 1
-
-    if [[ "$filter_json" != "null" ]]; then
-        info "Using filters: $filter_json"
-    fi
+    [[ "$filter_json" != "null" ]] && info "Using filters: $filter_json"
 
     info "Resolving revision..."
-
     local resolved_rev
     resolved_rev=$(resolve_ref "$ref" "$repo_id") || return 1
 
     info "Discovering file tree hash..."
-
     local file_tree_url="https://huggingface.co/api/$repo_id/tree/$resolved_rev?recursive=true"
-
     local file_tree_hash
-    file_tree_hash=$(discover_hash_fast "$file_tree_url") || {
-        error "Failed to discover hash for file tree"
-        return 1
-    }
+    file_tree_hash=$(discover_hash_fast "$file_tree_url") || { error "Failed to discover hash for file tree"; return 1; }
     debug "File tree hash: $file_tree_hash"
 
     local type="model"
     [[ "$repo_type" == "datasets" ]] && type="dataset"
+    local nix_func="fetchModel"
+    [[ "$type" == "dataset" ]] && nix_func="fetchDataset"
+
+    if [[ "$dry_run" == "true" ]]; then
+        local files
+        files=$(get_repo_files_fast "$repo_id" "$resolved_rev") || return 1
+
+        local filtered_files
+        if [[ ${#filters[@]} -gt 0 ]]; then
+            filtered_files=$(filter_files_json "$files" "${filters[@]}")
+        else
+            filtered_files=$(echo "$files" | jq '[.[] | select(.type != "directory")]')
+        fi
+
+        local nix_expr
+        nix_expr=$(format_fetch_call "" "nix-hug-lib" "$nix_func" "$bare_repo_path" "$resolved_rev" "$filter_json" "$file_tree_hash")
+
+        if [[ ${#filters[@]} -gt 0 ]]; then
+            display_filtered_files "$files" "${filters[@]}"
+        else
+            display_files "$filtered_files" "Files that would be fetched:"
+        fi
+        echo
+        printf '%b\n' "${BOLD}Nix expression:${NC}"
+        echo
+        echo "$nix_expr"
+        return 0
+    fi
 
     info "Building ${type}..."
-    build_and_report "$repo_id" "$resolved_rev" "$filter_json" "$file_tree_hash" "$out_dir" "$override" "$type"
+    build_and_report "$repo_id" "$resolved_rev" "$filter_json" "$file_tree_hash" "$type"
 }
 
 cmd_ls() {
@@ -106,115 +125,30 @@ cmd_ls() {
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --ref)
-                [[ -z "${2:-}" || "$2" == -* ]] && { error "--ref requires an argument"; return 1; }
-                ref="$2"
-                shift 2
-                ;;
-            --include|--exclude|--file)
-                [[ -z "${2:-}" || "$2" == -* ]] && { error "$1 requires an argument"; return 1; }
-                filters+=("$1" "$2")
-                shift 2
-                ;;
-            --help|-h)
-                show_ls_help
-                return 0
-                ;;
-            -*)
-                error "Unknown option: $1"
-                return 1
-                ;;
-            *)
-                url="$1"
-                shift
-                ;;
+            --ref) require_arg "${2:-}" "--ref" || return 1; ref="$2"; shift 2 ;;
+            --include|--exclude|--file) require_arg "${2:-}" "$1" || return 1; filters+=("$1" "$2"); shift 2 ;;
+            --help|-h) show_ls_help; return 0 ;;
+            -*) error "Unknown option: $1"; return 1 ;;
+            *) url="$1"; shift ;;
         esac
     done
 
     [[ -z "$url" ]] && { error "No repository URL specified"; return 1; }
 
-    local sanitized_url
-    sanitized_url=$(sanitize_hf_url "$url") || return 1
-
-    local parsed
-    parsed=$(parse_url "$sanitized_url") || return 1
-
-    local repo_id
-    repo_id=$(echo "$parsed" | jq -r '.repoId')
-
+    resolve_repo "$url" || return 1
     local files
-    files=$(get_repo_files_fast "$repo_id" "$ref") || return 1
-
-    local display_name
-    display_name=$(get_display_name "$repo_id")
+    files=$(get_repo_files_fast "$_repo_id" "$ref") || return 1
 
     if [[ ${#filters[@]} -gt 0 ]]; then
         display_filtered_files "$files" "${filters[@]}"
     else
-        display_files "$files" "Files in $display_name:"
+        display_files "$files" "Files in $_display_name:"
     fi
-}
-
-validate_out_dir() {
-    local out_dir="$1"
-    local resolved_out
-    resolved_out=$(realpath -m "$out_dir" 2>/dev/null || echo "$out_dir")
-    case "$resolved_out" in
-        /|/home|/nix|/nix/store|/etc|/usr|/var|/tmp|/boot|/dev|/proc|/sys|/run|/opt|/srv|/lib|/lib64|/sbin|/bin|/root|/mnt|/media)
-            error "Refusing to use system directory as output: $resolved_out"
-            return 1
-            ;;
-    esac
-    if [[ "$resolved_out" == "$HOME" ]]; then
-        error "Refusing to use home directory as output: $resolved_out"
-        return 1
-    fi
-}
-
-copy_to_out_dir() {
-    local store_path="$1" out_dir="$2" override="$3"
-    local repo_id="${4:-}" type="${5:-}" rev="${6:-}" filters="${7:-null}"
-
-    validate_out_dir "$out_dir" || return 1
-
-    if [[ -d "$out_dir" ]] && [[ -n "$(ls -A "$out_dir" 2>/dev/null)" ]]; then
-        if [[ "$override" != "true" ]]; then
-            error "Output directory is not empty: $out_dir"
-            error "Use --override to replace it"
-            return 1
-        fi
-        info "Overriding existing output directory..."
-        rm -rf "$out_dir"
-    fi
-
-    mkdir -p "$out_dir"
-    cp -rT "$store_path" "$out_dir"
-    chmod -R u+w "$out_dir"
-
-    jq -n \
-        --arg repoId "$repo_id" \
-        --arg type "$type" \
-        --arg rev "$rev" \
-        --arg filters "$filters" \
-        --arg storePath "$store_path" \
-        --arg exportedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '{repoId:$repoId,type:$type,rev:$rev,filters:$filters,storePath:$storePath,exportedAt:$exportedAt}' \
-        > "$out_dir/.nix-hug.json"
-
-    local src_count dst_count
-    src_count=$(find "$store_path" -type f | wc -l)
-    dst_count=$(find "$out_dir" -type f | wc -l)
-    if (( dst_count != src_count + 1 )); then
-        warn "File count mismatch: source=$src_count, target=$((dst_count - 1))"
-    fi
-
-    ok "Copied to: $out_dir"
-    info "To add back to Nix store: nix-hug import --path '$out_dir'"
 }
 
 build_and_report() {
     local repo_id="$1" ref="$2" filter_json="$3" file_tree_hash="$4"
-    local out_dir="${5:-}" override="${6:-false}" type="${7:-model}"
+    local type="${5:-model}"
 
     local nix_func="fetchModel"
     [[ "$type" == "dataset" ]] && nix_func="fetchDataset"
@@ -223,59 +157,33 @@ build_and_report() {
     local bare_repo_path
     bare_repo_path=$(get_bare_repo_path "$repo_id")
 
-    if [[ "$AUTO_PERSIST" == "true" ]]; then
-        local imported_path
-        if imported_path=$(persist_try_import "$bare_repo_path" "$ref"); then
-            ok "$label restored from persistent storage: $imported_path"
-            if [[ -n "$out_dir" ]]; then
-                copy_to_out_dir "$imported_path" "$out_dir" "$override" \
-                    "$bare_repo_path" "$type" "$ref" "$filter_json" || return 1
-            fi
-            generate_usage_example "$nix_func" "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash"
-            return 0
-        fi
+    parse_bare_repo "$bare_repo_path" || return 1
+    # shellcheck disable=SC2154  # set by parse_bare_repo
+    local _check_store_name="hf-${type}-${_org}-${_repo}-${ref}"
+    local store_path
+    if store_path=$(find_valid_store_path "$_check_store_name"); then
+        ok "Already in Nix store: $store_path"
+        generate_usage_example "$nix_func" "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash"
+        return 0
     fi
 
     local expr
     expr=$(generate_fetch_expr "$nix_func" "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash")
 
-    local build_output build_failed=false tmp_cache=""
-    if [[ -n "$out_dir" ]]; then
-        tmp_cache=$(mktemp -d "${TMPDIR:-/tmp}/nix-hug-cache.XXXXXX")
-    fi
-
-    if [[ -n "$tmp_cache" ]]; then
-        build_output=$(XDG_CACHE_HOME="$tmp_cache" build_with_expr "$expr" "Build") || build_failed=true
-    else
-        build_output=$(build_with_expr "$expr" "Build") || build_failed=true
-    fi
-
-    [[ -n "$tmp_cache" ]] && rm -rf "$tmp_cache"
-
-    if [[ "$build_failed" == "false" ]]; then
-        local store_path
-        if ! store_path=$(extract_store_path "$build_output"); then
-            error "Could not find store path in build output"
-            debug "Build output was: $build_output"
-            return 1
-        fi
-        ok "$label downloaded to: $store_path"
-
-        if [[ -n "$out_dir" ]]; then
-            copy_to_out_dir "$store_path" "$out_dir" "$override" \
-                "$bare_repo_path" "$type" "$ref" "$filter_json" || return 1
-        fi
-
-        if [[ "$AUTO_PERSIST" == "true" && -n "$PERSIST_DIR" ]]; then
-            persist_export "$store_path" "$bare_repo_path" "$type" "$ref" "$filter_json" || true
-        fi
-
-        generate_usage_example "$nix_func" "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash"
-        return 0
-    else
-        error "Failed to build ${type}: $build_output"
+    local build_output
+    build_output=$(build_with_expr "$expr" "Build") || {
+        error "Failed to build ${type}"
         return 1
-    fi
+    }
+
+    store_path=$(extract_store_path "$build_output") || {
+        error "Could not find store path in build output"
+        debug "Build output was: $build_output"
+        return 1
+    }
+
+    ok "$label downloaded to: $store_path"
+    generate_usage_example "$nix_func" "$bare_repo_path" "$ref" "$filter_json" "$file_tree_hash"
 }
 
 cmd_export() {
@@ -285,47 +193,37 @@ cmd_export() {
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --ref)
-                [[ -z "${2:-}" || "$2" == -* ]] && { error "--ref requires an argument"; return 1; }
-                ref="$2"
-                shift 2
-                ;;
-            --include|--exclude|--file)
-                [[ -z "${2:-}" || "$2" == -* ]] && { error "$1 requires an argument"; return 1; }
-                filters+=("$1" "$2")
-                shift 2
-                ;;
-            --help|-h)
-                show_export_help
-                return 0
-                ;;
-            -*)
-                error "Unknown option: $1"
-                return 1
-                ;;
-            *)
-                url="$1"
-                shift
-                ;;
+            --ref) require_arg "${2:-}" "--ref" || return 1; ref="$2"; shift 2 ;;
+            --include|--exclude|--file) require_arg "${2:-}" "$1" || return 1; filters+=("$1" "$2"); shift 2 ;;
+            --help|-h) show_export_help; return 0 ;;
+            -*) error "Unknown option: $1"; return 1 ;;
+            *) url="$1"; shift ;;
         esac
     done
 
     [[ -z "$url" ]] && { error "No repository URL specified"; show_export_help; return 1; }
-    require_persist_dir || return 1
 
-    local sanitized_url
-    sanitized_url=$(sanitize_hf_url "$url") || return 1
+    # Try offline path: parse locally and check nix store
+    if parse_bare_repo "$url" 2>/dev/null; then
+        local store_path=""
+        if store_path=$(find_store_path_by_repo "$_org" "$_repo"); then
+            local basename="${store_path##*/}"
+            local name="${basename#*-}"
+            local rev="${name: -40}"
+            local type_label="model"
+            [[ "$name" == hf-dataset-* ]] && type_label="dataset"
 
-    local parsed
-    parsed=$(parse_url "$sanitized_url") || return 1
+            info "Found in Nix store: $store_path"
+            export_to_hf_cache "$store_path" "$_org/$_repo" "$type_label" "$rev" || return 1
+            ok "Store path: $store_path"
+            return 0
+        fi
+    fi
 
-    local repo_id repo_type
-    repo_id=$(echo "$parsed" | jq -r '.repoId')
-    repo_type=$(echo "$parsed" | jq -r '.type')
-
-    local display_name
-    display_name=$(get_display_name "$repo_id")
-    info "Exporting $display_name ($ref)..."
+    # Online path: resolve repo via API
+    resolve_repo "$url" || return 1
+    local repo_id="$_repo_id" bare_repo_path="$_bare_repo_path"
+    info "Exporting $_display_name ($ref)..."
 
     local filter_json
     filter_json=$(create_filter_json_fast "${filters[@]}") || return 1
@@ -335,260 +233,436 @@ cmd_export() {
 
     local file_tree_url="https://huggingface.co/api/$repo_id/tree/$resolved_rev?recursive=true"
     local file_tree_hash
-    file_tree_hash=$(discover_hash_fast "$file_tree_url") || {
-        error "Failed to discover hash for file tree"
-        return 1
-    }
-
-    local bare_repo_path
-    bare_repo_path=$(get_bare_repo_path "$repo_id")
+    file_tree_hash=$(discover_hash_fast "$file_tree_url") || { error "Failed to discover hash for file tree"; return 1; }
 
     local type_label="model"
-    [[ "$repo_type" == "datasets" ]] && type_label="dataset"
+    [[ "$_repo_type" == "datasets" ]] && type_label="dataset"
 
-    local nix_func="fetchModel"
-    [[ "$repo_type" == "datasets" ]] && nix_func="fetchDataset"
+    local store_path=""
+    parse_bare_repo "$bare_repo_path" || return 1
+    local _check_store_name="hf-${type_label}-${_org}-${_repo}-${resolved_rev}"
+    if store_path=$(find_valid_store_path "$_check_store_name"); then
+        debug "Found existing store path: $store_path"
+    fi
 
-    local expr
-    expr=$(generate_fetch_expr "$nix_func" "$bare_repo_path" "$resolved_rev" "$filter_json" "$file_tree_hash")
+    if [[ -z "$store_path" ]]; then
+        local nix_func="fetchModel"
+        [[ "$_repo_type" == "datasets" ]] && nix_func="fetchDataset"
 
-    local build_output
-    build_output=$(build_with_expr "$expr" "Build") || {
-        error "Failed to build $type_label"
-        return 1
-    }
+        local expr
+        expr=$(generate_fetch_expr "$nix_func" "$bare_repo_path" "$resolved_rev" "$filter_json" "$file_tree_hash")
 
-    local store_path
-    if ! store_path=$(extract_store_path "$build_output"); then
-        error "Could not find store path in build output"
+        local build_output
+        build_output=$(build_with_expr "$expr" "Build") || {
+            error "Failed to build $type_label"
+            return 1
+        }
+
+        if ! store_path=$(extract_store_path "$build_output"); then
+            error "Could not find store path in build output"
+            return 1
+        fi
+    fi
+
+    export_to_hf_cache "$store_path" "$bare_repo_path" "$type_label" "$resolved_rev" || return 1
+    ok "Store path: $store_path"
+}
+
+export_to_hf_cache() {
+    local store_path="$1"
+    local bare_repo_path="$2"
+    local type_label="$3"
+    local resolved_rev="$4"
+
+    local hf_cache
+    hf_cache=$(resolve_hf_cache_dir)
+
+    parse_bare_repo "$bare_repo_path" || return 1
+    local org="$_org" repo="$_repo"
+
+    local filetree="$store_path/.nix-hug-filetree.json"
+    if [[ ! -f "$filetree" ]]; then
+        error "Store path missing .nix-hug-filetree.json: $store_path"
         return 1
     fi
 
-    persist_export "$store_path" "$bare_repo_path" "$type_label" "$resolved_rev" "$filter_json" || return 1
+    local snapshot_dir repo_dir
+    snapshot_dir=$(init_hf_cache_snapshot "$hf_cache" "$type_label" "$org" "$repo" "$resolved_rev")
+    repo_dir="$(dirname "$(dirname "$snapshot_dir")")"
+    mkdir -p "$repo_dir/blobs"
 
-    ok "Store path: $store_path"
+    # Pre-extract path and blob hash in a single jq call (LFS→lfs.oid, else→oid)
+    local entries
+    entries=$(jq -r '.[] | select(.type != "directory") | select(.path | startswith(".nix-hug-") | not)
+        | [.path, (if .lfs then .lfs.oid else .oid end)] | @tsv' "$filetree")
+
+    while IFS=$'\t' read -r fpath blob_hash; do
+        [[ -z "$fpath" ]] && continue
+
+        # Copy file to blobs/ if not already there
+        if [[ ! -f "$repo_dir/blobs/$blob_hash" ]]; then
+            cp -L "$store_path/$fpath" "$repo_dir/blobs/$blob_hash"
+        fi
+
+        # Create symlink in snapshot dir
+        local snap_file="$snapshot_dir/$fpath"
+        mkdir -p "$(dirname "$snap_file")"
+
+        # Relative path from snapshots/$rev/$path to blobs/$hash
+        # Base depth is 2 (../../blobs/$hash), +1 per directory level in path
+        local depth rel_prefix="../.."
+        depth=$(echo "$fpath" | tr -cd '/' | wc -c)
+        local i
+        for ((i = 0; i < depth; i++)); do
+            rel_prefix="../$rel_prefix"
+        done
+
+        ln -sf "$rel_prefix/blobs/$blob_hash" "$snap_file"
+    done <<< "$entries"
+
+    ok "Exported to HF cache: $repo_dir"
+    info "Snapshot: $snapshot_dir"
 }
 
 cmd_import() {
     local url=""
     local ref=""
-    local import_all=false
-    local auto_confirm=false
-    local import_path=""
+    local filters=()
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --all)
-                import_all=true
-                shift
-                ;;
-            --ref)
-                [[ -z "${2:-}" || "$2" == -* ]] && { error "--ref requires an argument"; return 1; }
-                ref="$2"
-                shift 2
-                ;;
-            --path)
-                [[ -z "${2:-}" || "$2" == -* ]] && { error "--path requires a directory argument"; return 1; }
-                import_path="$2"
-                shift 2
-                ;;
-            --yes|-y|--no-check-sigs)
-                auto_confirm=true
-                shift
-                ;;
-            --help|-h)
-                show_import_help
-                return 0
-                ;;
-            -*)
-                error "Unknown option: $1"
-                return 1
-                ;;
-            *)
-                url="$1"
-                shift
-                ;;
+            --ref) require_arg "${2:-}" "--ref" || return 1; ref="$2"; shift 2 ;;
+            --include|--exclude|--file) require_arg "${2:-}" "$1" || return 1; filters+=("$1" "$2"); shift 2 ;;
+            --help|-h) show_import_help; return 0 ;;
+            -*) error "Unknown option: $1"; return 1 ;;
+            *) url="$1"; shift ;;
         esac
     done
 
-    if [[ -n "$import_path" ]]; then
-        if [[ ! -f "$import_path/.nix-hug.json" ]]; then
-            error "Not a nix-hug export directory (missing .nix-hug.json): $import_path"
-            return 1
-        fi
-        local meta original_store_path store_name store_path
-        meta=$(jq '.' "$import_path/.nix-hug.json")
-        original_store_path=$(echo "$meta" | jq -r '.storePath // empty')
-        info "Importing $(echo "$meta" | jq -r '.repoId') from $import_path..."
+    import_from_hf_cache "$url" "$ref" "${filters[@]}"
+}
 
-        local tmp_meta
-        tmp_meta=$(mktemp "${TMPDIR:-/tmp}/nix-hug-meta.XXXXXX")
-        cp "$import_path/.nix-hug.json" "$tmp_meta"
+import_from_hf_cache() {
+    local repo_id="${1:-}"
+    local ref="${2:-}"
+    shift 2 || true
+    local filters=()
+    [[ $# -gt 0 ]] && filters=("$@")
 
-        # shellcheck disable=SC2064
-        trap "cp '${tmp_meta}' '${import_path}/.nix-hug.json' 2>/dev/null; rm -f '${tmp_meta}'" INT TERM
-        rm -f "$import_path/.nix-hug.json"
-
-        local add_err
-        add_err=$(mktemp "${TMPDIR:-/tmp}/nix-hug-add-err.XXXXXX")
-        if [[ -n "$original_store_path" ]]; then
-            store_name="${original_store_path##*/}"
-            store_name="${store_name#*-}"
-            store_path=$(nix --extra-experimental-features 'nix-command' store add --name "$store_name" "$import_path" 2>"$add_err") || true
-        else
-            store_path=$(nix --extra-experimental-features 'nix-command' store add "$import_path" 2>"$add_err") || true
-        fi
-
-        cp "$tmp_meta" "$import_path/.nix-hug.json"
-        rm -f "$tmp_meta"
-        trap - INT TERM
-
-        if [[ -z "$store_path" ]]; then
-            error "Failed to add directory to Nix store"
-            [[ -s "$add_err" ]] && error "$(cat "$add_err")"
-            rm -f "$add_err"
-            return 1
-        fi
-        rm -f "$add_err"
-
-        ok "Added to Nix store: $store_path"
-        return 0
-    fi
-
-    require_persist_dir || return 1
-
-    if [[ "$import_all" != "true" && -z "$url" ]]; then
-        error "No repository URL specified (use --all to import everything)"
+    if [[ -z "$repo_id" ]]; then
+        error "No repository URL specified"
         show_import_help
         return 1
     fi
 
-    if [[ "$auto_confirm" == "true" ]]; then
-        PERSIST_IMPORT_TRUSTED=true
+    parse_bare_repo "$repo_id" || return 1
+    # shellcheck disable=SC2154  # set by parse_bare_repo
+    local org="$_org" repo="$_repo" type_hint="$_type_hint"
+
+    local hf_cache
+    hf_cache=$(resolve_hf_cache_dir)
+
+    local cache_repo_dir="" detected_type=""
+
+    if [[ "$type_hint" == "models" && -d "$hf_cache/models--${org}--${repo}" ]]; then
+        cache_repo_dir="$hf_cache/models--${org}--${repo}"
+        detected_type="model"
+    elif [[ "$type_hint" == "datasets" && -d "$hf_cache/datasets--${org}--${repo}" ]]; then
+        cache_repo_dir="$hf_cache/datasets--${org}--${repo}"
+        detected_type="dataset"
+    elif [[ -d "$hf_cache/models--${org}--${repo}" ]]; then
+        cache_repo_dir="$hf_cache/models--${org}--${repo}"
+        detected_type="model"
+    elif [[ -d "$hf_cache/datasets--${org}--${repo}" ]]; then
+        cache_repo_dir="$hf_cache/datasets--${org}--${repo}"
+        detected_type="dataset"
     else
-        confirm_import_trust || return 1
+        error "Repository $org/$repo not found in HF cache at $hf_cache"
+        error "Expected: $hf_cache/models--${org}--${repo} or $hf_cache/datasets--${org}--${repo}"
+        return 1
     fi
 
-    if [[ "$import_all" == "true" ]]; then
-        local manifest
-        manifest=$(manifest_read)
-        local count
-        count=$(echo "$manifest" | jq 'length')
+    debug "Found $detected_type in cache: $cache_repo_dir"
 
-        if [[ "$count" -eq 0 ]]; then
-            echo "No models in persistent storage to import."
-            return 0
-        fi
-
-        local failures=0
-        while IFS= read -r entry; do
-            local store_path repo_id
-            store_path=$(echo "$entry" | jq -r '.storePath')
-            repo_id=$(echo "$entry" | jq -r '.repoId')
-
-            if nix-store --check-validity "$store_path" 2>/dev/null; then
-                debug "$repo_id already valid in store"
-                continue
-            fi
-
-            if persist_import "$store_path"; then
-                ok "Restored: $repo_id → $store_path"
-            else
-                warn "Failed to restore: $repo_id"
-                failures=$((failures + 1))
-            fi
-        done < <(echo "$manifest" | jq -c '.[]')
-
-        if [[ "$failures" -gt 0 ]]; then
-            error "$failures import(s) failed"
+    local resolved_rev=""
+    if [[ -n "$ref" ]]; then
+        if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+            resolved_rev="$ref"
+        elif [[ -f "$cache_repo_dir/refs/$ref" ]]; then
+            resolved_rev=$(cat "$cache_repo_dir/refs/$ref")
+        else
+            error "Ref '$ref' not found in $cache_repo_dir/refs/"
+            local available
+            available=$(for f in "$cache_repo_dir/refs/"*; do [[ -f "$f" ]] && printf '%s, ' "${f##*/}"; done)
+            [[ -n "$available" ]] && error "Available refs: ${available%, }"
             return 1
         fi
-        return 0
-    fi
-
-    local sanitized_url
-    sanitized_url=$(sanitize_hf_url "$url") || return 1
-
-    local parsed
-    parsed=$(parse_url "$sanitized_url") || return 1
-
-    local repo_id bare_repo_path
-    repo_id=$(echo "$parsed" | jq -r '.repoId')
-    bare_repo_path=$(get_bare_repo_path "$repo_id")
-
-    local entry=""
-    if [[ -n "$ref" ]]; then
-        entry=$(manifest_lookup "$bare_repo_path" "$ref" 2>/dev/null) || true
-    fi
-
-    if [[ -z "$entry" && -n "$ref" && ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-        local resolved_rev
-        if resolved_rev=$(resolve_ref "$ref" "$repo_id" 2>/dev/null); then
-            entry=$(manifest_lookup "$bare_repo_path" "$resolved_rev" 2>/dev/null) || true
+    else
+        if [[ -f "$cache_repo_dir/refs/main" ]]; then
+            resolved_rev=$(cat "$cache_repo_dir/refs/main")
+        else
+            local snapshots=()
+            for s in "$cache_repo_dir/snapshots/"*/; do
+                local _s="${s%/}"; [[ -d "$s" ]] && snapshots+=("${_s##*/}")
+            done
+            if [[ ${#snapshots[@]} -eq 1 ]]; then
+                resolved_rev="${snapshots[0]}"
+            elif [[ ${#snapshots[@]} -eq 0 ]]; then
+                error "No snapshots found in $cache_repo_dir/snapshots/"
+                return 1
+            else
+                error "No 'main' ref found and multiple snapshots exist. Use --ref to specify."
+                error "Available revisions: ${snapshots[*]}"
+                return 1
+            fi
         fi
     fi
 
-    if [[ -z "$entry" && -z "$ref" ]]; then
-        entry=$(manifest_lookup "$bare_repo_path" 2>/dev/null) || true
+    local snapshot_dir="$cache_repo_dir/snapshots/$resolved_rev"
+    if [[ ! -d "$snapshot_dir" ]]; then
+        error "Snapshot directory not found: $snapshot_dir"
+        return 1
     fi
 
-    if [[ -z "$entry" ]]; then
-        error "No entry found for $repo_id in persistent storage"
-        return 1
+    local store_name="hf-${detected_type}-${org}-${repo}-${resolved_rev}"
+
+    local nix_func="fetchModel"
+    [[ "$detected_type" == "dataset" ]] && nix_func="fetchDataset"
+
+    local filter_json="null"
+    if [[ ${#filters[@]} -gt 0 ]]; then
+        filter_json=$(create_filter_json_fast "${filters[@]}") || filter_json="null"
+    fi
+
+    # Single network call: fetch file tree JSON (used for metadata, hash, and LFS pre-population)
+    local api_file_tree="" file_tree_hash=""
+    info "Fetching file tree..."
+    api_file_tree=$(get_repo_files_fast "${detected_type}s/${org}/${repo}" "$resolved_rev" 2>/dev/null) || true
+    if [[ -n "$api_file_tree" ]]; then
+        file_tree_hash=$(printf '%s' "$api_file_tree" \
+            | nix --extra-experimental-features 'nix-command' hash file \
+                --type sha256 --sri --mode flat /dev/stdin 2>/dev/null) || file_tree_hash=""
     fi
 
     local store_path
-    store_path=$(echo "$entry" | jq -r '.storePath')
+    if store_path=$(find_valid_store_path "$store_name"); then
 
-    if nix-store --check-validity "$store_path" 2>/dev/null; then
-        ok "Already in store: $store_path"
+        ok "Already in Nix store: $store_path"
+        generate_cache_usage_example "$store_path" "$nix_func" "$org/$repo" "$resolved_rev" "$filter_json" "$file_tree_hash"
         return 0
     fi
 
-    persist_import "$store_path" || return 1
-    ok "Restored: $store_path"
+    info "Importing $org/$repo ($detected_type) rev ${resolved_rev:0:12}..."
+
+    # Build flat layout matching fetchModel/fetchDataset output
+    local tmp_dir
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/nix-hug-from-cache.XXXXXX")
+
+    if [[ ${#filters[@]} -gt 0 ]]; then
+        local filter_type="" patterns=()
+        for ((i=0; i<${#filters[@]}; i+=2)); do
+            local flag="${filters[i]}" pattern="${filters[i+1]}"
+            case "$flag" in
+                --include)
+                    [[ -n "$filter_type" && "$filter_type" != "include" ]] && { error "Cannot mix --include, --exclude, and --file filters"; rm -rf "$tmp_dir"; return 1; }
+                    filter_type="include"; patterns+=("$pattern") ;;
+                --exclude)
+                    [[ -n "$filter_type" && "$filter_type" != "exclude" ]] && { error "Cannot mix --include, --exclude, and --file filters"; rm -rf "$tmp_dir"; return 1; }
+                    filter_type="exclude"; patterns+=("$pattern") ;;
+                --file)
+                    [[ -n "$filter_type" && "$filter_type" != "file" ]] && { error "Cannot mix --include, --exclude, and --file filters"; rm -rf "$tmp_dir"; return 1; }
+                    filter_type="file"; patterns+=("$pattern") ;;
+            esac
+        done
+
+        local copy_failures=0 copied=0
+        while IFS= read -r -d '' file; do
+            local relpath="${file#"$snapshot_dir"/}"
+            local matched=false
+            case "$filter_type" in
+                include)
+                    for pat in "${patterns[@]}"; do
+                        # shellcheck disable=SC2254,SC2053  # intentional glob matching
+                        [[ "$relpath" == $pat || "${relpath##*/}" == $pat ]] && { matched=true; break; }
+                    done
+                    ;;
+                exclude)
+                    matched=true
+                    for pat in "${patterns[@]}"; do
+                        # shellcheck disable=SC2254,SC2053  # intentional glob matching
+                        [[ "$relpath" == $pat || "${relpath##*/}" == $pat ]] && { matched=false; break; }
+                    done
+                    ;;
+                file)
+                    for pat in "${patterns[@]}"; do
+                        [[ "$relpath" == "$pat" ]] && { matched=true; break; }
+                    done
+                    ;;
+            esac
+            if [[ "$matched" == "true" ]]; then
+                local dst="$tmp_dir/$relpath"
+                mkdir -p "$(dirname "$dst")"
+                if cp -L "$file" "$dst" 2>/dev/null; then
+                    copied=$((copied + 1))
+                else
+                    warn "Could not copy $relpath (broken symlink or missing blob)"
+                    copy_failures=$((copy_failures + 1))
+                fi
+            fi
+        done < <(find -L "$snapshot_dir" -type f -print0 2>/dev/null)
+
+        if [[ $copied -eq 0 ]]; then
+            error "No files to import (filters may have excluded everything, or all symlinks broken)"
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+        [[ $copy_failures -gt 0 ]] && warn "$copy_failures file(s) could not be copied"
+        info "Prepared $copied files..."
+    else
+        info "Copying files..."
+        cp -rL "$snapshot_dir/." "$tmp_dir/"
+    fi
+
+    # Create metadata files matching fetch layout
+    printf '{"id":"%s","sha":"%s"}' "$org/$repo" "$resolved_rev" > "$tmp_dir/.nix-hug-repoinfo.json"
+
+    if [[ -n "$api_file_tree" ]]; then
+        printf '%s' "$api_file_tree" > "$tmp_dir/.nix-hug-filetree.json"
+    fi
+
+    info "Adding to Nix store..."
+
+    local store_path
+    store_path=$(nix --extra-experimental-features 'nix-command' store add \
+        --name "$store_name" "$tmp_dir") || true
+
+    rm -rf "$tmp_dir"
+
+    if [[ -z "$store_path" ]]; then
+        error "Failed to add to Nix store"
+        return 1
+    fi
+
+    prepopulate_lfs_store_paths "$store_path" "$api_file_tree"
+
+    ok "Added to Nix store: $store_path"
+    generate_cache_usage_example "$store_path" "$nix_func" "$org/$repo" "$resolved_rev" "$filter_json" "$file_tree_hash"
 }
 
-cmd_store() {
-    local action=""
-
+cmd_scan() {
     while [[ $# -gt 0 ]]; do
         case $1 in
-            ls|list)
-                action="ls"
-                shift
-                ;;
-            path)
-                action="path"
-                shift
-                ;;
-            --help|-h)
-                show_store_help
-                return 0
-                ;;
-            *)
-                error "Unknown store action: $1"
-                show_store_help
-                return 1
-                ;;
+            --help|-h) show_scan_help; return 0 ;;
+            -*) error "Unknown option: $1"; return 1 ;;
+            *) error "Unexpected argument: $1"; return 1 ;;
         esac
     done
 
-    [[ -z "$action" ]] && {
-        show_store_help
-        return 1
-    }
+    local hf_cache
+    hf_cache=$(resolve_hf_cache_dir)
 
-    case "$action" in
-        ls)
-            persist_list
-            ;;
-        path)
-            if [[ -z "$PERSIST_DIR" ]]; then
-                error "No persist directory configured"
-                return 1
+    if [[ ! -d "$hf_cache" ]]; then
+        info "HuggingFace cache not found at: $hf_cache"
+        info "Models are typically cached in \$HF_HUB_CACHE or \$XDG_CACHE_HOME/huggingface/hub/"
+        return 0
+    fi
+
+    local found=false
+
+    info "Scanning $hf_cache"
+    echo
+    printf '  %s%-42s %-9s %-14s %9s %6s %-6s %s%s\n' \
+        "$BOLD" "REPOSITORY" "TYPE" "REV" "SIZE" "FILES" "STORE" "REFS" "$NC"
+
+    local dir
+    for dir in "$hf_cache"/{models,datasets}--*--*/; do
+        [[ -d "$dir" ]] || continue
+
+        local dirname="${dir%/}"
+        dirname="${dirname##*/}"
+
+        # Parse type, org, repo from dirname: {models|datasets}--{org}--{repo}
+        local type_prefix remainder org repo
+        if [[ "$dirname" =~ ^(models|datasets)--(.+) ]]; then
+            type_prefix="${BASH_REMATCH[1]}"
+            remainder="${BASH_REMATCH[2]}"
+        else
+            debug "Skipping unrecognized directory: $dirname"
+            continue
+        fi
+
+        if [[ "$remainder" =~ ^([^-]+(-[^-]+)*)--(.+)$ ]]; then
+            org="${BASH_REMATCH[1]}"
+            repo="${BASH_REMATCH[3]}"
+        else
+            debug "Could not parse org/repo from: $remainder"
+            continue
+        fi
+
+        local type="model"
+        [[ "$type_prefix" == "datasets" ]] && type="dataset"
+        local repo_id="$org/$repo"
+
+        unset ref_map 2>/dev/null
+        declare -A ref_map=()
+        if [[ -d "$dir/refs" ]]; then
+            local ref_file
+            for ref_file in "$dir/refs/"*; do
+                [[ -f "$ref_file" ]] || continue
+                local ref_name ref_hash
+                ref_name="${ref_file##*/}"
+                ref_hash=$(< "$ref_file") || continue
+                ref_map["$ref_hash"]+="${ref_name} "
+            done
+        fi
+
+        if [[ ! -d "$dir/snapshots" ]]; then
+            debug "No snapshots directory in: $dirname"
+            continue
+        fi
+
+        local snap_dir
+        for snap_dir in "$dir/snapshots/"*/; do
+            [[ -d "$snap_dir" ]] || continue
+
+            local rev="${snap_dir%/}"
+            rev="${rev##*/}"
+
+            if [[ ! "$rev" =~ ^[0-9a-f]{7,}$ ]]; then
+                debug "Skipping non-hash snapshot: $rev"
+                continue
             fi
-            echo "$PERSIST_DIR"
-            ;;
-    esac
+
+            found=true
+
+            local file_count total_bytes
+            read -r file_count total_bytes < <(
+                find -L "$snap_dir" -type f -printf '%s\n' 2>/dev/null \
+                | awk '{s+=$1; c++} END {print c+0, s+0}'
+            )
+
+            local ref_labels=""
+            if [[ -n "${ref_map[$rev]:-}" ]]; then
+                ref_labels="${ref_map[$rev]% }"  # trim trailing space
+            fi
+
+            local in_store=false
+            find_valid_store_path "hf-${type}-${org}-${repo}-${rev}" >/dev/null && in_store=true
+
+            local short_rev="${rev:0:12}"
+            [[ ${#rev} -gt 12 ]] && short_rev="${short_rev}..."
+            local formatted_size
+            formatted_size=$(format_size "$total_bytes")
+            local store_marker=""
+            [[ "$in_store" == "true" ]] && store_marker="${GREEN}yes${NC}"
+            printf "  %-42s %-9s %-14s %9s %6d %-6b ${DIM}%s${NC}\n" \
+                "$repo_id" "$type" "$short_rev" "$formatted_size" "$file_count" "$store_marker" "$ref_labels"
+        done
+
+        unset ref_map 2>/dev/null
+    done
+
+    if [[ "$found" != "true" ]]; then
+        info "No models or datasets found in $hf_cache"
+    fi
 }

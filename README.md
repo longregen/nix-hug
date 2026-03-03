@@ -1,16 +1,18 @@
 # nix-hug
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
-[![Nix Flake](https://img.shields.io/badge/Nix-Flake-5277C3?logo=nixos&logoColor=white)](https://nixos.wiki/wiki/Flakes)
+[![License:
+MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md) [![Nix
+Flake](https://img.shields.io/badge/Nix-Flake-5277C3?logo=nixos&logoColor=white)](https://nixos.wiki/wiki/Flakes)
 [![CI](https://github.com/longregen/nix-hug/actions/workflows/ci.yml/badge.svg)](https://github.com/longregen/nix-hug/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-4.0.0-green)
+![Version](https://img.shields.io/badge/version-5.0.0-green)
 
 Declarative Hugging Face model and dataset management for Nix. `nix-hug` pins
 models to exact revisions, fetches only the files you need, builds
-offline-compatible HuggingFace Hub caches, and helps persist models regardless of
-garbage collection.
+offline-compatible HuggingFace Hub caches, and supports importing from and
+exporting to the local HuggingFace cache.
 
 The CLI is used to download models into the nix store:
+
 ```bash
 $ nix run github:longregen/nix-hug -- fetch MiniMaxAI/MiniMax-M2.5
 nix-hug-lib.fetchModel {
@@ -19,7 +21,9 @@ nix-hug-lib.fetchModel {
   fileTreeHash = "sha256-...";
 };
 ```
+
 The output can then be used in nix:
+
 ```nix
 # Smoke test: an app that just loads the model in python
 let
@@ -30,7 +34,6 @@ let
   };
   cache = nix-hug-lib.buildCache {
     models = [ minimax ];
-    hash = lib.fakeHash;
   };
   python = pkgs.python3.withPackages (p: [ p.transformers p.torch ]);
 in
@@ -59,11 +62,10 @@ in
   - [ls](#ls)
   - [export](#export)
   - [import](#import)
-  - [store](#store)
+  - [scan](#scan)
 - [Nix Library](#nix-library)
   - [fetchModel / fetchDataset](#fetchmodel--fetchdataset)
   - [buildCache](#buildcache)
-- [Persistent Storage](#persistent-storage)
 - [URL Formats](#url-formats)
 - [Development](#development)
 - [License](#license)
@@ -103,7 +105,6 @@ let
 
   cache = nix-hug-lib.buildCache {
     models = [ mistral ];
-    hash = "sha256-...";
   };
 in
   pkgs.mkShell {
@@ -146,12 +147,11 @@ pointers.
 directory layout that HuggingFace Hub's Python libraries expect:
 
 ```
-hub/
-  models--org--repo/
-    refs/
-      main            # contains the pinned commit hash
-    snapshots/
-      <rev>/          # the actual model files
+models--org--repo/
+  refs/
+    main            # contains the pinned commit hash
+  snapshots/
+    <rev>/          # the actual model files
 ```
 
 Set `HF_HUB_CACHE` to this store path and any library that reads from the Hub
@@ -163,13 +163,15 @@ Everything is content-addressed. The same inputs produce the same store paths.
 Models can be shared across machines, cached in CI, and pinned in lockfiles
 the same way as any other Nix dependency.
 
-### Persistent storage internals
+### HuggingFace cache integration
 
 `nix-collect-garbage` removes store paths not referenced by a GC root. For
 large models, re-downloading after collection is expensive. The `export`
-command copies a model's store path to a local Nix binary cache using
-`nix copy`, and `import` restores it. A JSON manifest tracks exported entries
-so you can restore individual models or everything at once.
+command copies a model from the Nix store into the local HuggingFace cache
+directory, and `import` copies it back. This uses the same directory layout
+that `transformers`, `diffusers`, and other HF libraries read from. The cache
+location is determined by `$HF_HUB_CACHE`, `$HF_HOME/hub`, or defaults to
+`$XDG_CACHE_HOME/huggingface/hub/`.
 
 ## Installation
 
@@ -196,7 +198,6 @@ so you can restore individual models or everything at once.
 
       model-cache = nix-hug-lib.buildCache {
         models = [ my-model ];
-        hash = "sha256-psQcpC+BAfAFpu7P5T1+VXAPSytrq4GcfqiY2KWAU8g=";
       };
     in {
       packages.${system} = {
@@ -240,7 +241,7 @@ Options:
 - `--include PATTERN`: include files matching a glob pattern
 - `--exclude PATTERN`: exclude files matching a glob pattern
 - `--file FILENAME`: include a specific file by name
-- `--out DIR`: copy the result to a regular directory
+- `--dry-run`: show what would be fetched without downloading
 
 ```console
 # Fetch only safetensors weights
@@ -268,11 +269,13 @@ $ nix-hug ls stanfordnlp/imdb --include '*.parquet'
 
 ### `export`
 
-Fetches a model or dataset and copies the store path to persistent local
-storage. Requires `persist_dir` to be configured (see
-[Persistent Storage](#persistent-storage)). The result is similar to using
-`nix-hug fetch` with the `--out` argument, in that the files get copied
-outside of the nix store, and thus won't be garbage-collected.
+Fetches a model or dataset and copies it into the local HuggingFace cache
+directory. This makes the model available to `transformers`, `diffusers`,
+and other HF libraries, and preserves it outside the Nix store (surviving
+garbage collection).
+
+The cache location is determined by `$HF_HUB_CACHE`, `$HF_HOME/hub`, or
+defaults to `$XDG_CACHE_HOME/huggingface/hub/`.
 
 Accepts the same filter options as `fetch`.
 
@@ -283,36 +286,47 @@ $ nix-hug export openai-community/gpt2 --include '*.safetensors'
 
 ### `import`
 
-Restores a previously exported model from the local binary cache back into
-the Nix store.
+Imports a model or dataset from the local HuggingFace cache into the Nix
+store. If you already have models downloaded by `transformers`, `diffusers`,
+or `huggingface-cli`, this avoids re-downloading files that are already on
+disk. Use `nix-hug scan` to see what's available before importing.
+
+The imported store path has the same layout as `nix-hug fetch`, so the
+output can be used with `buildCache` and `nix build`.
+
+The cache location is determined by `$HF_HUB_CACHE`, `$HF_HOME/hub`, or
+defaults to `$XDG_CACHE_HOME/huggingface/hub/`.
 
 ```console
 $ nix-hug import <url> [options]
-$ nix-hug import --all
 ```
 
 Options:
 
 - `--ref REF`: match a specific revision
-- `--all`: import all entries from the manifest
-- `--yes`, `-y`: skip the trust confirmation prompt
-
-Imports use `--no-check-sigs` because the local binary cache is not signed.
-An interactive confirmation is shown unless `--yes` is passed.
+- `--include PATTERN`: include files matching a glob pattern
+- `--exclude PATTERN`: exclude files matching a glob pattern
+- `--file FILENAME`: include a specific file by name
 
 ```console
 $ nix-hug import openai-community/gpt2
-$ nix-hug import --all --yes
+$ nix-hug import openai-community/gpt2 --include '*.safetensors'
 ```
 
-### `store`
+### `scan`
 
-Manage persistent storage.
+Lists all models and datasets in the local HuggingFace cache. Useful for
+discovering what's available before running `import`.
+
+The cache location is determined by `$HF_HUB_CACHE`, `$HF_HOME/hub`, or
+defaults to `$XDG_CACHE_HOME/huggingface/hub/`.
 
 ```console
-$ nix-hug store ls      # list persisted models with validity status
-$ nix-hug store path    # print the configured persist directory
+$ nix-hug scan
 ```
+
+Shows each cached repository with its type, revision, size, file count,
+whether it's already in the Nix store, and any ref labels.
 
 ## Nix Library
 
@@ -360,18 +374,14 @@ is used.
 ### buildCache
 
 Combines fetched models and datasets into a HuggingFace Hub-compatible cache
-directory.
+directory using symlinks (no data duplication).
 
 ```nix
 nix-hug-lib.buildCache {
   models = [ my-model another-model ];
   datasets = [ my-dataset ];
-  hash = "sha256-...";
 }
 ```
-
-The `hash` is the output hash of the combined cache derivation. Set it to an
-empty string on first build and Nix will report the correct value.
 
 Use the result as `HF_HUB_CACHE`:
 
@@ -379,65 +389,6 @@ Use the result as `HF_HUB_CACHE`:
 $ export HF_HUB_CACHE=/nix/store/...-hf-hub-cache
 $ export TRANSFORMERS_OFFLINE=1
 $ python your_script.py
-```
-
-## Persistent Storage
-
-Models in `/nix/store/` are removed by `nix-collect-garbage` when no GC root
-references them. For models that are expensive to re-download, this is a handy
-feature to keep models outside of nix.
-
-### Configuration
-
-Create `~/.config/nix-hug/config` (format ini, respects $XDG_CONFIG_HOME):
-
-```ini
-persist_dir=/persist/models
-auto_persist=false
-```
-
-Or set environment variables (these take precedence over the config file's values):
-
-```bash
-export NIX_HUG_PERSIST_DIR=/persist/models
-export NIX_HUG_AUTO_PERSIST=true
-```
-
-### Workflow
-
-```console
-# Export to persistent storage
-$ nix-hug export stas/tiny-random-llama-2
-
-# Check what is persisted
-$ nix-hug store ls
-
-# After garbage collection, restore
-$ nix-hug import stas/tiny-random-llama-2
-
-# Or restore everything
-$ nix-hug import --all
-```
-
-### Auto-persist
-
-When `auto_persist` is set to `true`, the `fetch` command handles persistence
-automatically. Before building, it checks the manifest and restores the model
-from the binary cache if the store path was collected. After building, it
-exports the result.
-
-This only affects the CLI. The nix library is not affected by `import`,
-`export`, or the configuration file.
-
-```bash
-export NIX_HUG_PERSIST_DIR=/persist/models
-export NIX_HUG_AUTO_PERSIST=true
-
-# First fetch downloads and auto-exports
-nix-hug fetch openai-community/gpt2
-
-# After garbage collection, fetch auto-imports
-nix-hug fetch openai-community/gpt2
 ```
 
 ## URL Formats
@@ -469,7 +420,6 @@ Run the tests:
 
 ```console
 $ nix flake check
-$ nix flake check ./test
 ```
 
 ## License

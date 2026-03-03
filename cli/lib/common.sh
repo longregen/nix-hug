@@ -1,4 +1,5 @@
-VERSION="4.0.0"
+# shellcheck disable=SC2034  # used by sourcing scripts
+VERSION="5.0.0"
 
 declare -A LOG_LEVELS=(
     [TRACE]=0
@@ -11,31 +12,17 @@ declare -A LOG_LEVELS=(
 
 CURRENT_LOG_LEVEL="${CURRENT_LOG_LEVEL:-${LOG_LEVEL:-INFO}}"
 
+# shellcheck disable=SC2034  # color vars used by sourcing scripts
 if [[ -z "${NIX_HUG_COLORS_INITIALIZED:-}" ]]; then
-    if command -v tput >/dev/null 2>&1 && [[ -t 2 ]]; then
-        RED=$(tput setaf 1)
-        GREEN=$(tput setaf 2)
-        BLUE=$(tput setaf 4)
-        YELLOW=$(tput setaf 3)
-        BOLD=$(tput bold)
-        DIM=$(tput dim)
-        NC=$(tput sgr0)
-    elif [[ -t 2 ]]; then
-        RED=$'\033[0;31m'
-        GREEN=$'\033[0;32m'
-        BLUE=$'\033[0;34m'
-        YELLOW=$'\033[0;33m'
-        BOLD=$'\033[1m'
-        DIM=$'\033[2m'
-        NC=$'\033[0m'
-    else
-        RED=''
-        GREEN=''
-        BLUE=''
-        YELLOW=''
-        BOLD=''
-        DIM=''
-        NC=''
+    RED='' GREEN='' BLUE='' YELLOW='' BOLD='' DIM='' NC=''
+    if [[ -t 2 ]]; then
+        if command -v tput >/dev/null 2>&1; then
+            RED=$(tput setaf 1) GREEN=$(tput setaf 2) BLUE=$(tput setaf 4)
+            YELLOW=$(tput setaf 3) BOLD=$(tput bold) DIM=$(tput dim) NC=$(tput sgr0)
+        else
+            RED=$'\033[0;31m' GREEN=$'\033[0;32m' BLUE=$'\033[0;34m'
+            YELLOW=$'\033[0;33m' BOLD=$'\033[1m' DIM=$'\033[2m' NC=$'\033[0m'
+        fi
     fi
     export NIX_HUG_COLORS_INITIALIZED=1
 fi
@@ -89,9 +76,6 @@ get_config() {
 
 load_config
 
-PERSIST_DIR=$(get_config "persist_dir" "")
-AUTO_PERSIST=$(get_config "auto_persist" "false")
-
 NIX_STORE="${NIX_STORE_DIR:-/nix/store}"
 
 extract_store_path() {
@@ -124,6 +108,8 @@ log() {
     
     printf '%s[%s]%s %b\n' "$color" "$lvl" "$NC" "$msg" >&2
 }
+
+require_arg() { [[ -n "${1:-}" && "$1" != -* ]] || { error "${2:-option} requires an argument"; return 1; }; }
 
 debug() { log DEBUG "$*"; }
 info() { log INFO "$*"; }
@@ -245,6 +231,19 @@ parse_url() {
     fi
 }
 
+# Sets: _repo_id _repo_type _bare_repo_path _display_name
+resolve_repo() {
+    local url="$1"
+    local sanitized_url
+    sanitized_url=$(sanitize_hf_url "$url") || return 1
+    local parsed
+    parsed=$(parse_url "$sanitized_url") || return 1
+    _repo_id=$(echo "$parsed" | jq -r '.repoId')
+    _repo_type=$(echo "$parsed" | jq -r '.type')
+    _bare_repo_path=$(get_bare_repo_path "$_repo_id")
+    _display_name=$(get_display_name "$_repo_id")
+}
+
 get_display_name() {
     local repo_id="$1"
     if [[ "$repo_id" =~ ^models/(.*)$ ]]; then
@@ -315,4 +314,85 @@ resolve_ref() {
 
 glob_to_regex() {
     printf '%s' "$1" | sed 's/\./\\./g; s/\*/\.\*/g; s/\?/\./g'
+}
+
+resolve_hf_cache_dir() {
+    if [[ -n "${HF_HUB_CACHE:-}" ]]; then
+        echo "$HF_HUB_CACHE"
+    elif [[ -n "${HF_HOME:-}" ]]; then
+        echo "$HF_HOME/hub"
+    else
+        echo "${XDG_CACHE_HOME:-$HOME/.cache}/huggingface/hub"
+    fi
+}
+
+# Find a valid store path by name suffix. Prints path or returns 1.
+find_valid_store_path() {
+    local store_name="$1"
+    local existing
+    existing=$(echo /nix/store/*-"$store_name")
+    if [[ "$existing" != "/nix/store/*-$store_name" ]] \
+        && nix-store --check-validity "$existing" 2>/dev/null; then
+        echo "$existing"
+        return 0
+    fi
+    return 1
+}
+
+# Find any valid store path for a given org/repo combination.
+# Tries both model and dataset types. Returns the first valid match.
+find_store_path_by_repo() {
+    local org="$1" repo="$2"
+    local type match
+    for type in model dataset; do
+        for match in /nix/store/*-hf-"${type}"-"${org}"-"${repo}"-*; do
+            [[ -e "$match" ]] || continue
+            if nix-store --check-validity "$match" 2>/dev/null; then
+                echo "$match"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
+# Parse "org/repo" from input, stripping optional models/ or datasets/ prefix.
+# Sets variables: _org, _repo, _type_hint (empty, "models", or "datasets")
+parse_bare_repo() {
+    local input="$1"
+    _type_hint=""
+    _org=""
+    _repo=""
+
+    local stripped="$input"
+    stripped="${stripped#models/}"
+    [[ "$stripped" != "$input" ]] && _type_hint="models"
+    input="$stripped"
+    stripped="${stripped#datasets/}"
+    [[ "$stripped" != "$input" ]] && _type_hint="datasets"
+
+    if [[ ! "$stripped" =~ ^([^/]+)/([^/]+)$ ]]; then
+        error "Invalid repository format: $stripped (expected org/repo)"
+        return 1
+    fi
+    _org="${BASH_REMATCH[1]}"
+    _repo="${BASH_REMATCH[2]}"
+}
+
+# Create HF-compatible cache directory structure. No-op if already exists.
+# Returns the snapshot directory path via stdout.
+init_hf_cache_snapshot() {
+    local base_dir="$1" type="$2" org="$3" repo="$4" rev="$5"
+    local prefix="models"
+    [[ "$type" == "dataset" ]] && prefix="datasets"
+
+    local repo_dir="$base_dir/${prefix}--${org}--${repo}"
+    local snapshot_dir="$repo_dir/snapshots/$rev"
+
+    mkdir -p "$repo_dir/refs"
+    mkdir -p "$snapshot_dir"
+    # No trailing newline — matches HF Hub convention
+    printf '%s' "$rev" > "$repo_dir/refs/main"
+
+    echo "$snapshot_dir"
 }

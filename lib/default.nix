@@ -1,11 +1,17 @@
 { pkgs }:
 
 let
-  inherit (builtins) fetchurl fetchGit readFile fromJSON;
+  inherit (builtins)
+    fetchurl
+    fetchGit
+    readFile
+    fromJSON
+    ;
   inherit (pkgs) lib;
   inherit (lib) optionalAttrs;
 
-  applyFilter = filter: files:
+  applyFilter =
+    filter: files:
     if filter == null then
       files
     else
@@ -17,23 +23,20 @@ let
 
         filteredFiles =
           if filter ? include then
-            lib.filter (f:
-              lib.any (pattern: builtins.match pattern f.path != null) filter.include
-            ) lfsFiles ++ nonLfsFiles
+            lib.filter (f: lib.any (pattern: builtins.match pattern f.path != null) filter.include) lfsFiles
+            ++ nonLfsFiles
           else if filter ? exclude then
-            lib.filter (f:
-              !lib.any (pattern: builtins.match pattern f.path != null) filter.exclude
-            ) lfsFiles ++ nonLfsFiles
+            lib.filter (f: !lib.any (pattern: builtins.match pattern f.path != null) filter.exclude) lfsFiles
+            ++ nonLfsFiles
           else if filter ? files then
-            lib.filter (f:
-              lib.elem f.path filter.files
-            ) validFiles
+            lib.filter (f: lib.elem f.path filter.files) validFiles
           else
             validFiles;
       in
-        filteredFiles;
+      filteredFiles;
 
-  mkRepoId = url: isDataset:
+  mkRepoId =
+    url: isDataset:
     let
       # Handle different URL formats
       cleaned =
@@ -56,37 +59,48 @@ let
 
       parts = lib.splitString "/" cleaned;
     in
-      if (builtins.length parts) < 2 then
-        throw "Invalid repository URL '${url}'"
-      else {
+    if (builtins.length parts) < 2 then
+      throw "Invalid repository URL '${url}'"
+    else
+      {
         org = builtins.elemAt parts 0;
         repo = builtins.elemAt parts 1;
         repoId = "${builtins.elemAt parts 0}/${builtins.elemAt parts 1}";
       };
 
-  getRepoInfo = { org, repo, rev, repoInfoHash ? null, fileTreeHash, isDataset ? false }:
+  getRepoInfo =
+    {
+      org,
+      repo,
+      rev,
+      repoInfoHash ? null,
+      fileTreeHash,
+      isDataset ? false,
+    }:
     let
       repoId = "${org}/${repo}";
       apiBase = "https://huggingface.co/api/${if isDataset then "datasets" else "models"}";
       isCommitHash = builtins.match "[0-9a-f]{40}" rev != null;
 
       # Legacy path: when rev is not a commit hash, fetch API to resolve it
-      repoInfoFetched = if (!isCommitHash && repoInfoHash != null) then
-        builtins.trace ''
-          nix-hug: rev="${rev}" is not a commit hash. This is DEPRECATED and will stop working in a future release.
-          Run `nix-hug fetch ${repoId}` to get a pinned expression with a commit hash.''
-        (fetchurl {
-          url = "${apiBase}/${repoId}";
-          sha256 = repoInfoHash;
-        })
-      else null;
+      repoInfoFetched =
+        if (!isCommitHash && repoInfoHash != null) then
+          builtins.trace
+            ''
+              nix-hug: rev="${rev}" is not a commit hash. This is DEPRECATED and will stop working in a future release.
+              Run `nix-hug fetch ${repoId}` to get a pinned expression with a commit hash.''
+            (fetchurl {
+              url = "${apiBase}/${repoId}";
+              sha256 = repoInfoHash;
+            })
+        else
+          null;
 
-      repoInfoData = if repoInfoFetched != null then
-        fromJSON (readFile repoInfoFetched)
-      else null;
+      repoInfoData = if repoInfoFetched != null then fromJSON (readFile repoInfoFetched) else null;
 
       resolvedRev =
-        if isCommitHash then rev
+        if isCommitHash then
+          rev
         else if repoInfoData != null then
           (repoInfoData.sha or repoInfoData.commit or rev)
         else
@@ -94,26 +108,38 @@ let
             nix-hug: rev="${rev}" is not a commit hash and no repoInfoHash was provided.
             Run `nix-hug fetch ${repoId}` to generate a pinned expression.'';
 
-      fileTreeData = fromJSON (readFile (fetchurl {
-        url = "${apiBase}/${repoId}/tree/${rev}?recursive=true";
-        sha256 = fileTreeHash;
-      }));
+      fileTreeData = fromJSON (
+        readFile (fetchurl {
+          url = "${apiBase}/${repoId}/tree/${rev}?recursive=true";
+          sha256 = fileTreeHash;
+        })
+      );
 
-    in {
-      inherit org repo repoId rev resolvedRev repoInfoFetched;
+    in
+    {
+      inherit
+        org
+        repo
+        repoId
+        rev
+        resolvedRev
+        repoInfoFetched
+        ;
       files = lib.filter (f: (f.type or "") != "directory") fileTreeData;
       lfsFiles = lib.filter (f: f ? lfs) fileTreeData;
       nonLfsFiles = lib.filter (f: !(f ? lfs) && (f.type or "") != "directory") fileTreeData;
     };
 
-  fetchRepo = isDataset: {
-    url,
-    rev,
-    filters ? null,
-    repoInfoHash ? null,  # deprecated — kept for backward compat
-    fileTreeHash,
-    derivationHash ? null,  # deprecated — kept for backward compat
-  }:
+  fetchRepo =
+    isDataset:
+    {
+      url,
+      rev,
+      filters ? null,
+      repoInfoHash ? null, # deprecated — kept for backward compat
+      fileTreeHash,
+      derivationHash ? null, # deprecated — kept for backward compat
+    }:
     let
       parsed = mkRepoId url isDataset;
       typePrefix = if isDataset then "datasets/" else "";
@@ -122,7 +148,12 @@ let
 
       repoInfo = getRepoInfo {
         inherit (parsed) org repo;
-        inherit rev repoInfoHash fileTreeHash isDataset;
+        inherit
+          rev
+          repoInfoHash
+          fileTreeHash
+          isDataset
+          ;
       };
 
       gitRepo = fetchGit {
@@ -140,89 +171,124 @@ let
         };
       }) filteredLfsFiles;
     in
-      pkgs.runCommand "hf-${typeName}-${repoInfo.org}-${repoInfo.repo}-${repoInfo.resolvedRev}"
-        ({
+    pkgs.runCommand "hf-${typeName}-${repoInfo.org}-${repoInfo.repo}-${repoInfo.resolvedRev}"
+      (
+        {
           passthru = {
             inherit (parsed) org repo;
             revision = repoInfo.resolvedRev;
           };
-        } // optionalAttrs (derivationHash != null) {
+        }
+        // optionalAttrs (derivationHash != null) {
           outputHash = derivationHash;
           outputHashMode = "recursive";
           outputHashAlgo = "sha256";
-        }) ''
+        }
+      )
+      ''
         mkdir -p $out
 
         cp -rT ${gitRepo} $out/
         chmod -R +w $out
 
-        ${builtins.concatStringsSep "\n" (map (lfsFile: ''
-          mkdir -p "$out/$(dirname "${lfsFile.name}")"
-          cp ${lfsFile.drv} "$out/${lfsFile.name}"
-        '') lfsDerivations)}
+        ${builtins.concatStringsSep "\n" (
+          map (lfsFile: ''
+            mkdir -p "$out/$(dirname "${lfsFile.name}")"
+            ln -sf ${lfsFile.drv} "$out/${lfsFile.name}"
+          '') lfsDerivations
+        )}
 
-        ${if repoInfo.repoInfoFetched != null then
-          # Legacy: copy full API response (backward compat with old derivationHash)
-          ''cp ${repoInfo.repoInfoFetched} $out/.nix-hug-repoinfo.json''
-        else
-          ''echo '{"id":"${repoInfo.repoId}","sha":"${repoInfo.resolvedRev}"}' > $out/.nix-hug-repoinfo.json''
+        ${
+          if repoInfo.repoInfoFetched != null then
+            # Legacy: copy full API response (backward compat with old derivationHash)
+            "cp ${repoInfo.repoInfoFetched} $out/.nix-hug-repoinfo.json"
+          else
+            ''echo '{"id":"${repoInfo.repoId}","sha":"${repoInfo.resolvedRev}"}' > $out/.nix-hug-repoinfo.json''
         }
 
-        cp ${fetchurl {
-          url = "https://huggingface.co/api/${typeApi}/${repoInfo.repoId}/tree/${rev}?recursive=true";
-          sha256 = fileTreeHash;
-        }} $out/.nix-hug-filetree.json
+        cp ${
+          fetchurl {
+            url = "https://huggingface.co/api/${typeApi}/${repoInfo.repoId}/tree/${rev}?recursive=true";
+            sha256 = fileTreeHash;
+          }
+        } $out/.nix-hug-filetree.json
       '';
 
   fetchModel = fetchRepo false;
   fetchDataset = fetchRepo true;
 
   buildCache =
-    { models ? [], datasets ? [], hash }:
+    {
+      models ? [ ],
+      datasets ? [ ],
+      hash ? null,
+    }:
     let
-      taggedModels = map (item: { inherit item; isDataset = false; }) models;
-      taggedDatasets = map (item: { inherit item; isDataset = true; }) datasets;
+      taggedModels = map (item: {
+        inherit item;
+        isDataset = false;
+      }) models;
+      taggedDatasets = map (item: {
+        inherit item;
+        isDataset = true;
+      }) datasets;
       allTagged = taggedModels ++ taggedDatasets;
 
-      itemInfos = map (tagged:
+      itemInfos = map (
+        tagged:
         let
           item = tagged.item;
           inherit (item) org repo revision;
           isDataset = tagged.isDataset;
-        in {
-          inherit item org repo revision isDataset;
-          hubPath = if isDataset
-            then "hub/datasets--${org}--${repo}"
-            else "hub/models--${org}--${repo}";
+        in
+        {
+          inherit
+            item
+            org
+            repo
+            revision
+            isDataset
+            ;
+          hubPath = if isDataset then "datasets--${org}--${repo}" else "models--${org}--${repo}";
           fullRepoId = "${if isDataset then "dataset" else "model"}:${org}/${repo}";
         }
       ) allTagged;
     in
-      pkgs.runCommand "hf-hub-cache"
-        {
-          outputHash = hash;
-          outputHashMode = "recursive";
-          outputHashAlgo = "sha256";
-        } ''
-        mkdir -p $out
+    (
+      if hash != null then
+        builtins.trace "nix-hug: buildCache 'hash' parameter is deprecated and ignored. It can be safely removed."
+      else
+        lib.id
+    )
+      (
+        pkgs.linkFarm "hf-hub-cache" (
+          lib.concatMap (info: [
+            {
+              name = "${info.hubPath}/snapshots/${info.revision}";
+              path = info.item;
+            }
+            {
+              name = "${info.hubPath}/refs/main";
+              path = pkgs.writeText "hf-ref-main" info.revision;
+            }
+          ]) itemInfos
+        )
+      );
 
-        ${builtins.concatStringsSep "\n" (map (info: ''
-          mkdir -p "$out/${info.hubPath}/snapshots"
-          mkdir -p "$out/${info.hubPath}/refs"
-          cp -r ${info.item} "$out/${info.hubPath}/snapshots/${info.revision}"
-          # No trailing newline — HF Hub reads the ref file verbatim
-          printf '%s' "${info.revision}" > "$out/${info.hubPath}/refs/main"
-        '') itemInfos)}
-      '';
-
-in {
-  inherit fetchModel fetchDataset buildCache applyFilter;
+in
+{
+  inherit
+    fetchModel
+    fetchDataset
+    buildCache
+    applyFilter
+    ;
   meta = {
     description = "A library for fetching Hugging Face models";
     maintainers = [ "nix-hug" ];
   };
   version = {
-    lib = "4.0.0";
+    lib = "5.0.0";
     api = 1;
   };
 }
