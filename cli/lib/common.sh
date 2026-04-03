@@ -316,6 +316,79 @@ glob_to_regex() {
     printf '%s' "$1" | sed 's/\./\\./g; s/\*/\.\*/g; s/\?/\./g'
 }
 
+is_git_url() { [[ "$1" == git+* ]]; }
+
+# Sets: _git_url _git_lfs_url _git_ref _git_org _git_repo
+parse_git_url() {
+    local input="$1"
+    _git_url="" _git_lfs_url="" _git_ref="" _git_org="" _git_repo=""
+
+    local raw="${input#git+}"
+
+    local base_url="$raw" query_string=""
+    if [[ "$raw" == *"?"* ]]; then
+        base_url="${raw%%\?*}"
+        query_string="${raw#*\?}"
+    fi
+
+    base_url="${base_url%.git}"
+    _git_url="$base_url"
+
+    if [[ -n "$query_string" ]]; then
+        local IFS='&'
+        for param in $query_string; do
+            local key="${param%%=*}" val="${param#*=}"
+            case "$key" in
+                lfs-url) _git_lfs_url="$val" ;;
+                ref) _git_ref="$val" ;;
+            esac
+        done
+    fi
+
+    local host="" path=""
+    if [[ "$base_url" =~ ^[a-z]+://([^@]+@)?([^:/]+)(:[0-9]+)?(/.*)?$ ]]; then
+        host="${BASH_REMATCH[2]}"
+        path="${BASH_REMATCH[4]}"
+    fi
+
+    if [[ "$path" =~ /([^/]+)/([^/]+)$ ]]; then
+        _git_org="${BASH_REMATCH[1]}"
+        _git_repo="${BASH_REMATCH[2]}"
+    fi
+
+    if [[ -z "$_git_lfs_url" && -n "$host" && -n "$path" ]]; then
+        _git_lfs_url="https://${host}${path}/raw/commit"
+    fi
+
+    debug "Parsed git URL: url=$_git_url lfsUrl=$_git_lfs_url ref=$_git_ref org=$_git_org repo=$_git_repo"
+}
+
+# Resolve a git ref to a commit hash via git ls-remote
+resolve_git_ref() {
+    local ref="$1" url="$2"
+    if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "$ref"
+        return 0
+    fi
+    local output stderr_file
+    stderr_file=$(mktemp)
+    output=$(git ls-remote "$url" "$ref" 2>"$stderr_file") || {
+        error "Failed to query $url for ref '$ref'"
+        [[ -s "$stderr_file" ]] && error "$(cat "$stderr_file")"
+        rm -f "$stderr_file"
+        return 1
+    }
+    rm -f "$stderr_file"
+    local resolved
+    resolved=$(echo "$output" | awk '{print $1; exit}')
+    if [[ -z "$resolved" ]]; then
+        error "Could not resolve ref '$ref' from $url"
+        return 1
+    fi
+    debug "Resolved git ref '$ref' to: $resolved"
+    echo "$resolved"
+}
+
 resolve_hf_cache_dir() {
     if [[ -n "${HF_HUB_CACHE:-}" ]]; then
         echo "$HF_HUB_CACHE"

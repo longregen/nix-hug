@@ -35,31 +35,28 @@ cmd_fetch() {
     local ref="main"
     local filters=()
     local dry_run=false
+    local lfs_url_override=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
             --ref) require_arg "${2:-}" "--ref" || return 1; ref="$2"; shift 2 ;;
+            --lfs-url) require_arg "${2:-}" "--lfs-url" || return 1; lfs_url_override="$2"; shift 2 ;;
             --include|--exclude|--file) require_arg "${2:-}" "$1" || return 1; filters+=("$1" "$2"); shift 2 ;;
-            --dry-run)
-                dry_run=true
-                shift
-                ;;
-            --help|-h)
-                show_fetch_help
-                return 0
-                ;;
-            -*)
-                error "Unknown option: $1"
-                return 1
-                ;;
-            *)
-                url="$1"
-                shift
-                ;;
+            --dry-run) dry_run=true; shift ;;
+            --help|-h) show_fetch_help; return 0 ;;
+            -*) error "Unknown option: $1"; return 1 ;;
+            *) url="$1"; shift ;;
         esac
     done
 
     [[ -z "$url" ]] && { error "No repository URL specified"; return 1; }
+
+    if is_git_url "$url"; then
+        cmd_fetch_git "$url" "$ref" "$dry_run" "$lfs_url_override" "${filters[@]}"
+        return $?
+    fi
+
+    [[ -n "$lfs_url_override" ]] && { warn "--lfs-url is only used with git+ URLs"; }
 
     resolve_repo "$url" || return 1
     # shellcheck disable=SC2154  # set by resolve_repo
@@ -116,6 +113,71 @@ cmd_fetch() {
 
     info "Building ${type}..."
     build_and_report "$repo_id" "$resolved_rev" "$filter_json" "$file_tree_hash" "$type"
+}
+
+cmd_fetch_git() {
+    local url="$1" ref="$2" dry_run="$3" lfs_url_override="$4"
+    shift 4
+    local filters=("$@")
+
+    parse_git_url "$url" || return 1
+    # shellcheck disable=SC2154
+    local git_url="$_git_url"
+    local lfs_url="${lfs_url_override:-$_git_lfs_url}"
+    local git_ref="${_git_ref:-$ref}"
+    # shellcheck disable=SC2154
+    local org="$_git_org" repo="$_git_repo"
+
+    if [[ -z "$lfs_url" ]]; then
+        error "Could not derive LFS URL. Use --lfs-url to specify it."
+        return 1
+    fi
+
+    info "Fetching git repo: $org/$repo ($git_ref)..."
+
+    local filter_json
+    filter_json=$(create_filter_json_fast "${filters[@]}") || return 1
+    [[ "$filter_json" != "null" ]] && info "Using filters: $filter_json"
+
+    info "Resolving revision..."
+    local resolved_rev
+    resolved_rev=$(resolve_git_ref "$git_ref" "$git_url") || return 1
+
+    if [[ "$dry_run" == "true" ]]; then
+        local nix_expr
+        nix_expr=$(format_git_fetch_call "" "nix-hug-lib" "$git_url" "$resolved_rev" "$lfs_url" "$filter_json")
+        printf '%b\n' "${BOLD}Nix expression:${NC}"
+        echo
+        echo "$nix_expr"
+        return 0
+    fi
+
+    local store_name="git-${org}-${repo}-${resolved_rev}"
+    local store_path
+    if store_path=$(find_valid_store_path "$store_name"); then
+        ok "Already in Nix store: $store_path"
+        generate_git_usage_example "$git_url" "$resolved_rev" "$lfs_url" "$filter_json"
+        return 0
+    fi
+
+    info "Building..."
+    local expr
+    expr=$(generate_git_fetch_expr "$git_url" "$resolved_rev" "$lfs_url" "$filter_json")
+
+    local build_output
+    build_output=$(build_with_expr "$expr" "Build") || {
+        error "Failed to build git repo"
+        return 1
+    }
+
+    store_path=$(extract_store_path "$build_output") || {
+        error "Could not find store path in build output"
+        debug "Build output was: $build_output"
+        return 1
+    }
+
+    ok "Downloaded to: $store_path"
+    generate_git_usage_example "$git_url" "$resolved_rev" "$lfs_url" "$filter_json"
 }
 
 cmd_ls() {

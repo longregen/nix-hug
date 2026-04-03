@@ -217,6 +217,113 @@ let
   fetchModel = fetchRepo false;
   fetchDataset = fetchRepo true;
 
+  listFilesRecursive =
+    base:
+    let
+      go =
+        dir:
+        lib.concatLists (
+          lib.mapAttrsToList (
+            name: type:
+            let
+              full = "${dir}/${name}";
+            in
+            if type == "directory" then
+              go full
+            else if type == "regular" then
+              [
+                {
+                  absPath = full;
+                  relPath = lib.removePrefix "${base}/" full;
+                }
+              ]
+            else
+              [ ]
+          ) (builtins.readDir dir)
+        );
+    in
+    go base;
+
+  parseLfsPointer =
+    path:
+    let
+      content = readFile path;
+    in
+    if !(lib.hasPrefix "version https://git-lfs.github.com/spec/v1" content) then
+      null
+    else
+      let
+        lines = lib.splitString "\n" content;
+        oidLine = lib.findFirst (l: lib.hasPrefix "oid sha256:" l) null lines;
+      in
+      if oidLine == null then null else lib.removePrefix "oid sha256:" oidLine;
+
+  discoverLfsFiles =
+    gitRepo:
+    let
+      base = toString gitRepo;
+      files = listFilesRecursive base;
+      withOid = map (f: {
+        path = f.relPath;
+        oid = parseLfsPointer f.absPath;
+      }) files;
+    in
+    map (f: {
+      inherit (f) path;
+      lfs.oid = f.oid;
+    }) (lib.filter (f: f.oid != null) withOid);
+
+  fetchGitLFS =
+    {
+      url,
+      rev,
+      lfsUrl,
+      name ? null,
+      filters ? null,
+    }:
+    let
+      gitRepo = fetchGit { inherit url rev; };
+
+      allLfsFiles = discoverLfsFiles gitRepo;
+      filteredLfsFiles = applyFilter filters allLfsFiles;
+
+      effectiveLfsUrl =
+        if builtins.isFunction lfsUrl then lfsUrl else (r: p: "${lfsUrl}/${r}/${p}");
+
+      lfsDerivations = map (file: {
+        inherit (file) path;
+        drv = fetchurl {
+          url = effectiveLfsUrl rev file.path;
+          sha256 = file.lfs.oid;
+        };
+      }) filteredLfsFiles;
+
+      urlParts = lib.splitString "/" (lib.removeSuffix ".git" url);
+      partsLen = builtins.length urlParts;
+      derivedName =
+        if partsLen >= 2 then
+          "git-${builtins.elemAt urlParts (partsLen - 2)}-${builtins.elemAt urlParts (partsLen - 1)}-${rev}"
+        else
+          "git-repo-${rev}";
+      effectiveName = if name != null then name else derivedName;
+    in
+    pkgs.runCommand effectiveName {
+      passthru = {
+        revision = rev;
+        gitUrl = url;
+      };
+    } ''
+      mkdir -p $out
+      cp -rT ${gitRepo} $out/
+      chmod -R +w $out
+
+      ${builtins.concatStringsSep "\n" (
+        map (lfsFile: ''
+          ln -sf ${lfsFile.drv} "$out/${lfsFile.path}"
+        '') lfsDerivations
+      )}
+    '';
+
   buildCache =
     {
       models ? [ ],
@@ -280,6 +387,7 @@ in
   inherit
     fetchModel
     fetchDataset
+    fetchGitLFS
     buildCache
     applyFilter
     ;

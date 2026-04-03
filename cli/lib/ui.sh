@@ -21,6 +21,7 @@ ${BOLD}OPTIONS:${NC}
 
 ${BOLD}EXAMPLES:${NC}
     nix-hug fetch openai-community/gpt2 --include '*.safetensors'
+    nix-hug fetch git+ssh://codeberg.org/org/model
     nix-hug ls openai-community/gpt2 --exclude '*.bin'
     nix-hug export openai-community/gpt2
     nix-hug import mistralai/Mistral-7B
@@ -38,6 +39,7 @@ Downloads a model/dataset and generates a pinned Nix expression.
 
 ${BOLD}OPTIONS:${NC}
     --ref REF           Git reference (default: main)
+    --lfs-url URL       LFS download URL prefix (for git+ URLs)
     --include PATTERN   Include LFS files matching glob
     --exclude PATTERN   Exclude LFS files matching glob
     --file FILENAME     Include specific file by name
@@ -47,6 +49,8 @@ ${BOLD}OPTIONS:${NC}
 ${BOLD}EXAMPLES:${NC}
     nix-hug fetch openai-community/gpt2 --include '*.safetensors'
     nix-hug fetch openai-community/gpt2 --dry-run
+    nix-hug fetch git+ssh://codeberg.org/org/model
+    nix-hug fetch git+https://codeberg.org/org/repo
 EOF
 }
 
@@ -158,27 +162,17 @@ display_files() {
     fi
 }
 
+print_usage_block() {
+    printf 'Usage:\n\n%s;\n' "$1"
+}
+
 generate_usage_example() {
-    local nix_func="$1"
-    local repo_id="$2"
-    local ref="$3"
-    local filter_json="$4"
-    local file_tree_hash="$5"
-
-    cat << EOF
-Usage:
-
-$(format_fetch_call "  " "nix-hug-lib" "$nix_func" "$repo_id" "$ref" "$filter_json" "$file_tree_hash");
-EOF
+    local nix_func="$1" repo_id="$2" ref="$3" filter_json="$4" file_tree_hash="$5"
+    print_usage_block "$(format_fetch_call "  " "nix-hug-lib" "$nix_func" "$repo_id" "$ref" "$filter_json" "$file_tree_hash")"
 }
 
 generate_cache_usage_example() {
-    local store_path="$1"
-    local nix_func="$2"
-    local repo_id="$3"
-    local ref="$4"
-    local filter_json="$5"
-    local file_tree_hash="$6"
+    local store_path="$1" nix_func="$2" repo_id="$3" ref="$4" filter_json="$5" file_tree_hash="$6"
 
     if [[ -n "$file_tree_hash" ]]; then
         generate_usage_example "$nix_func" "$repo_id" "$ref" "$filter_json" "$file_tree_hash"
@@ -189,6 +183,11 @@ ${BOLD}To get the hashes, run:${NC}
   nix-hug fetch $repo_id --ref $ref
 EOF
     fi
+}
+
+generate_git_usage_example() {
+    local git_url="$1" rev="$2" lfs_url="$3" filter_json="$4"
+    print_usage_block "$(format_git_fetch_call "  " "nix-hug-lib" "$git_url" "$rev" "$lfs_url" "$filter_json")"
 }
 
 filter_files_json() {

@@ -48,6 +48,7 @@
             nix
             cacert
             curl
+            git
           ];
 
           installPhase = ''
@@ -76,6 +77,7 @@
                   pkgs.nix
                   pkgs.jq
                   pkgs.curl
+                  pkgs.git
                 ]
               } \
               --set NIX_HUG_LIB_DIR $out/share/nix-hug/lib \
