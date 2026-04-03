@@ -234,7 +234,8 @@ let
               [
                 {
                   absPath = full;
-                  relPath = lib.removePrefix "${base}/" full;
+                  # Strip store path context so relPath can be used in fetchurl URLs
+                  relPath = builtins.unsafeDiscardStringContext (lib.removePrefix "${base}/" full);
                 }
               ]
             else
