@@ -510,7 +510,12 @@ import_from_hf_cache() {
     if store_path=$(find_valid_store_path "$store_name"); then
 
         ok "Already in Nix store: $store_path"
-        generate_cache_usage_example "$store_path" "$nix_func" "$org/$repo" "$resolved_rev" "$filter_json" "$file_tree_hash"
+        if [[ -n "$file_tree_hash" ]]; then
+            generate_usage_example "$nix_func" "$org/$repo" "$resolved_rev" "$filter_json" "$file_tree_hash"
+        else
+            info "Fetching hashes..."
+            cmd_fetch "$org/$repo" --ref "$resolved_rev" "${filters[@]}"
+        fi
         return 0
     fi
 
@@ -608,7 +613,12 @@ import_from_hf_cache() {
     prepopulate_lfs_store_paths "$store_path" "$api_file_tree"
 
     ok "Added to Nix store: $store_path"
-    generate_cache_usage_example "$store_path" "$nix_func" "$org/$repo" "$resolved_rev" "$filter_json" "$file_tree_hash"
+    if [[ -n "$file_tree_hash" ]]; then
+        generate_usage_example "$nix_func" "$org/$repo" "$resolved_rev" "$filter_json" "$file_tree_hash"
+    else
+        info "Fetching hashes..."
+        cmd_fetch "$org/$repo" --ref "$resolved_rev" "${filters[@]}"
+    fi
 }
 
 cmd_scan() {
@@ -727,4 +737,108 @@ cmd_scan() {
     if [[ "$found" != "true" ]]; then
         info "No models or datasets found in $hf_cache"
     fi
+}
+
+cmd_import_all() {
+    local yes=false
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -y|--yes) yes=true; shift ;;
+            --help|-h) show_import_all_help; return 0 ;;
+            -*) error "Unknown option: $1"; return 1 ;;
+            *) error "Unexpected argument: $1"; return 1 ;;
+        esac
+    done
+
+    local hf_cache
+    hf_cache=$(resolve_hf_cache_dir)
+
+    if [[ ! -d "$hf_cache" ]]; then
+        info "HuggingFace cache not found at: $hf_cache"
+        return 0
+    fi
+
+    # Collect repos not yet in the Nix store
+    local entries=()
+    local types=() repo_ids=() revs=()
+
+    for dir in "$hf_cache"/{models,datasets}--*--*/; do
+        [[ -d "$dir" ]] || continue
+
+        local dirname="${dir%/}"
+        dirname="${dirname##*/}"
+
+        local type_prefix remainder org repo
+        if [[ "$dirname" =~ ^(models|datasets)--(.+) ]]; then
+            type_prefix="${BASH_REMATCH[1]}"
+            remainder="${BASH_REMATCH[2]}"
+        else
+            continue
+        fi
+
+        if [[ "$remainder" =~ ^([^-]+(-[^-]+)*)--(.+)$ ]]; then
+            org="${BASH_REMATCH[1]}"
+            repo="${BASH_REMATCH[3]}"
+        else
+            continue
+        fi
+
+        local type="model"
+        [[ "$type_prefix" == "datasets" ]] && type="dataset"
+
+        [[ -d "$dir/snapshots" ]] || continue
+
+        for snap_dir in "$dir/snapshots/"*/; do
+            [[ -d "$snap_dir" ]] || continue
+            local rev="${snap_dir%/}"
+            rev="${rev##*/}"
+            [[ "$rev" =~ ^[0-9a-f]{7,}$ ]] || continue
+
+            # Skip if already in store
+            if find_valid_store_path "hf-${type}-${org}-${repo}-${rev}" >/dev/null 2>&1; then
+                continue
+            fi
+
+            types+=("$type")
+            repo_ids+=("$org/$repo")
+            revs+=("$rev")
+        done
+    done
+
+    if [[ ${#repo_ids[@]} -eq 0 ]]; then
+        info "Nothing to import — all cached repos are already in the Nix store."
+        return 0
+    fi
+
+    printf '%b\n' "${BOLD}Repositories to import:${NC}"
+    echo
+    for ((i=0; i<${#repo_ids[@]}; i++)); do
+        printf "  %-9s %-42s %s\n" "${types[i]}" "${repo_ids[i]}" "${revs[i]:0:12}..."
+    done
+    echo
+    info "${#repo_ids[@]} repository snapshot(s) will be imported."
+
+    if [[ "$yes" != "true" ]]; then
+        echo
+        read -rp "Proceed? [y/N] " answer
+        case "$answer" in
+            [yY]|[yY][eE][sS]) ;;
+            *) info "Aborted."; return 0 ;;
+        esac
+    fi
+
+    local imported=0 failed=0
+    for ((i=0; i<${#repo_ids[@]}; i++)); do
+        echo
+        if import_from_hf_cache "${repo_ids[i]}" "${revs[i]}"; then
+            imported=$((imported + 1))
+        else
+            warn "Failed to import ${repo_ids[i]} rev ${revs[i]:0:12}"
+            failed=$((failed + 1))
+        fi
+    done
+
+    echo
+    ok "Done: $imported imported, $failed failed."
 }

@@ -1,5 +1,23 @@
 #compdef nix-hug
 
+_nix_hug_cached_repos() {
+    local hf_cache="${HF_HUB_CACHE:-${HF_HOME:+$HF_HOME/hub}}"
+    hf_cache="${hf_cache:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface/hub}"
+    [[ -d "$hf_cache" ]] || return
+
+    local -a repos
+    local dir
+    for dir in "$hf_cache"/{models,datasets}--*--*/; do
+        [[ -d "$dir" ]] || continue
+        local name="${dir%/}"
+        name="${name##*/}"
+        local type="${name%%--*}"
+        name="${name#${type}--}"
+        repos+=("${name/--//}:$type")
+    done
+    _describe -t repos 'cached repository' repos
+}
+
 _nix_hug() {
     local -a commands global_opts
     commands=(
@@ -7,6 +25,7 @@ _nix_hug() {
         'ls:List files in a Hugging Face repo'
         'export:Export model/dataset from Nix store to HF cache'
         'import:Import model/dataset from HF cache to Nix store'
+        'import-all:Import all cached models/datasets into Nix store'
         'scan:Scan Hugging Face cache directory'
     )
     global_opts=(
@@ -43,6 +62,11 @@ _nix_hug() {
         '--exclude[Exclude filter pattern]:pattern:'
         '--file[Filter file]:file:_files'
         '--help[Show help]'
+        '1:repository:_nix_hug_cached_repos'
+    )
+    local -a import_all_opts=(
+        {-y,--yes}'[Skip confirmation prompt]'
+        '--help[Show help]'
     )
     local -a scan_opts=(
         '--help[Show help]'
@@ -58,8 +82,9 @@ _nix_hug() {
         fetch)  _arguments -s $fetch_opts ;;
         ls)     _arguments -s $ls_opts ;;
         export) _arguments -s $export_opts ;;
-        import) _arguments -s $import_opts ;;
-        scan)   _arguments -s $scan_opts ;;
+        import)     _arguments -s $import_opts ;;
+        import-all) _arguments -s $import_all_opts ;;
+        scan)       _arguments -s $scan_opts ;;
     esac
 }
 

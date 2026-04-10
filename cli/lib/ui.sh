@@ -12,6 +12,7 @@ ${BOLD}COMMANDS:${NC}
     ls              List repository contents without downloading
     export          Export model/dataset from Nix store to HF cache
     import          Import model/dataset from HF cache to Nix store
+    import-all      Import all cached models/datasets into Nix store
     scan            Scan local HuggingFace cache for downloaded models
 
 ${BOLD}OPTIONS:${NC}
@@ -25,6 +26,7 @@ ${BOLD}EXAMPLES:${NC}
     nix-hug ls openai-community/gpt2 --exclude '*.bin'
     nix-hug export openai-community/gpt2
     nix-hug import mistralai/Mistral-7B
+    nix-hug import-all -y
 
 Run 'nix-hug <command> --help' for command-specific options.
 For more information, visit: https://github.com/longregen/nix-hug
@@ -112,6 +114,24 @@ ${BOLD}OPTIONS:${NC}
 ${BOLD}EXAMPLES:${NC}
     nix-hug import openai-community/gpt2
     nix-hug import openai-community/gpt2 --include '*.safetensors'
+EOF
+}
+
+show_import_all_help() {
+    cat << EOF
+${BOLD}nix-hug import-all${NC} [OPTIONS]
+
+Scans the local HuggingFace cache and imports all models/datasets
+not yet in the Nix store. Equivalent to running 'nix-hug import'
+for each entry shown by 'nix-hug scan' that isn't already imported.
+
+${BOLD}OPTIONS:${NC}
+    -y, --yes       Skip confirmation prompt
+    --help          Show this help
+
+${BOLD}EXAMPLES:${NC}
+    nix-hug import-all
+    nix-hug import-all -y
 EOF
 }
 

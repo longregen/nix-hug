@@ -1,11 +1,29 @@
 # Bash completion for nix-hug
 
+_nix_hug_cached_repos() {
+    local hf_cache="${HF_HUB_CACHE:-${HF_HOME:+$HF_HOME/hub}}"
+    hf_cache="${hf_cache:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface/hub}"
+    [[ -d "$hf_cache" ]] || return
+
+    local dir
+    for dir in "$hf_cache"/{models,datasets}--*--*/; do
+        [[ -d "$dir" ]] || continue
+        local name="${dir%/}"
+        name="${name##*/}"
+        # models--org--repo -> org/repo
+        name="${name#models--}"
+        name="${name#datasets--}"
+        # first -- becomes /
+        echo "${name/--//}"
+    done
+}
+
 _nix_hug() {
     local cur prev words cword
     _init_completion || return
 
     # Commands
-    local commands="fetch ls export import scan"
+    local commands="fetch ls export import import-all scan"
 
     # Global options
     local global_opts="--debug --help --version"
@@ -15,6 +33,7 @@ _nix_hug() {
     local ls_opts="--ref --include --exclude --file --help"
     local export_opts="--ref --include --exclude --file --help"
     local import_opts="--ref --include --exclude --file --help"
+    local import_all_opts="-y --yes --help"
     local scan_opts="--help"
 
     # Complete commands
@@ -43,6 +62,13 @@ _nix_hug() {
         import)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=($(compgen -W "$import_opts" -- "$cur"))
+            else
+                COMPREPLY=($(compgen -W "$(_nix_hug_cached_repos)" -- "$cur"))
+            fi
+            ;;
+        import-all)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=($(compgen -W "$import_all_opts" -- "$cur"))
             fi
             ;;
         scan)

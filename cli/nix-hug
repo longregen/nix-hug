@@ -24,7 +24,7 @@ main() {
                 echo "nix-hug version ${VERSION}"
                 exit 0
                 ;;
-            fetch|ls|export|import|scan)
+            fetch|ls|export|import|import-all|scan)
                 command="$1"
                 shift
                 break
@@ -56,6 +56,9 @@ main() {
             ;;
         import)
             cmd_import "$@"
+            ;;
+        import-all)
+            cmd_import_all "$@"
             ;;
         scan)
             cmd_scan "$@"
